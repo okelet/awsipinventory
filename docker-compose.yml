@@ -1,0 +1,11 @@
+
+version: "3"
+services:
+  awsipinventory:
+    build: .
+    command: "--log-level debug -f json"
+    environment:
+      AWS_DEFAULT_REGION:
+      AWS_ACCESS_KEY_ID:
+      AWS_SECRET_ACCESS_KEY:
+      AWS_SESSION_TOKEN:

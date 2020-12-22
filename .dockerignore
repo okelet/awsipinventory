@@ -1,0 +1,11 @@
+__pycache__
+.idea
+.directory
+dist
+build
+*.egg-info
+.git
+Dockerfile
+docker-compose.yml
+.gitignore
+.editconfig

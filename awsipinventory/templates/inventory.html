@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.6.3/css/all.css">
+    <link rel="stylesheet" href="https://unpkg.com/bootstrap-table@1.17.1/dist/bootstrap-table.min.css">
+    <title>AWS inventory</title>
+</head>
+<body>
+
+<div class="container-fluid">
+
+    <h1>AWS inventory</h1>
+
+    <p>Account <a href="https://console.aws.amazon.com/console/home" target="_blank">{{ account_id }}{% if account_alias %} - {{ account_alias }}{% endif %}; regions: {{ regions | join(", ") }}</a></p>
+
+    <table class="table table-striped table-bordered table-hover" id="mainDataTable">
+    </table>
+
+</div>
+
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+<script src="https://unpkg.com/bootstrap-table@1.17.1/dist/bootstrap-table.min.js"></script>
+<script src="https://unpkg.com/bootstrap-table@1.17.1/dist/extensions/export/bootstrap-table-export.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tableexport.jquery.plugin@1.10.20/tableExport.min.js"></script>
+
+<script>
+
+    function ipSorter(a, b) {
+        if (!a) {
+            return -1;
+        }
+        if (!b) {
+            return 1;
+        }
+        let aSplit = a.split('\.');
+        let bSplit = b.split('\.');
+
+        let aVal = parseInt(aSplit[0])*256*256*256 + parseInt(aSplit[1])*256*256 + parseInt(aSplit[2])*256 + parseInt(aSplit[3]);
+        let bVal = parseInt(bSplit[0])*256*256*256 + parseInt(bSplit[1])*256*256 + parseInt(bSplit[2])*256 + parseInt(bSplit[3]);
+        if (aVal > bVal) {
+            return 1;
+        }
+        else if (bVal > aVal) {
+            return -1;
+        }
+        else {
+            return 0;
+        }
+    }
+
+    $(document).ready(function () {
+        $("#mainDataTable").bootstrapTable({
+            data: {{ data | tojson(indent=2) }},
+            columns: [
+                {
+                    "field": "object_console_url",
+                    "title": "Console URL",
+                    "forceExport": true,
+                    "visible": false,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_console_url) {
+                            return row.object_console_url;
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object_service_url",
+                    "title": "Service URL",
+                    "forceExport": true,
+                    "visible": false,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_service_url) {
+                            return row.object_service_url;
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "network",
+                    "title": "Network",
+                    "formatter": function(value, row, index, field) {
+                        let vpc_display = "";
+                        if (row.vpc_name) {
+                            vpc_display = ` (${row.vpc_name})`;
+                        }
+                        let subnet_display = "";
+                        if (row.subnet_name) {
+                            subnet_display = ` (${row.subnet_name})`;
+                        }
+                        return `<a href="${row.vpc_link}" target="_blank">${row.vpc_id}${vpc_display}</a> / <a href="${row.subnet_link}" target="_blank" ">${row.subnet_id}${subnet_display}</a>`;
+                    },
+                    "forceHide": true,
+                },
+                {
+                    "field": "vpc_id",
+                    "title": "VPC ID",
+                    "sortable": true,
+                    "visible": false,
+                    "forceExport": true,
+                },
+                {
+                    "field": "vpc_name",
+                    "title": "VPC name",
+                    "sortable": true,
+                    "visible": false,
+                    "forceExport": true,
+                    "formatter": function(value, row, index, field) {
+                        if (row.vpc_name) {
+                            return row.vpc_name;
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "vpc_link",
+                    "title": "VPC link",
+                    "forceExport": true,
+                    "visible": false,
+                },
+                {
+                    "field": "subnet_id",
+                    "title": "Subnet ID",
+                    "sortable": true,
+                    "visible": false,
+                    "forceExport": true,
+                },
+                {
+                    "field": "subnet_name",
+                    "title": "Subnet name",
+                    "sortable": true,
+                    "visible": false,
+                    "forceExport": true,
+                    "formatter": function(value, row, index, field) {
+                        if (row.subnet_name) {
+                            return row.subnet_name;
+                        }
+                        else {
+                            return "";
+                        }
+                    }
+                },
+                {
+                    "field": "subnet_link",
+                    "title": "Subnet link",
+                    "forceExport": true,
+                    "visible": false,
+                },
+                {
+                    "field": "private_ip_address",
+                    "title": "Private IP",
+                    "sortable": true,
+                    "sorter": ipSorter,
+                    "forceExport": true,
+                },
+                {
+                    "field": "public_ip_address",
+                    "title": "Public IP",
+                    "sortable": true,
+                    "sorter": ipSorter,
+                    "forceExport": true,
+                    "formatter": function(value, row, index, field) {
+                        if (row.public_ip_address) {
+                            return row.public_ip_address;
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object_type",
+                    "title": "Type",
+                    "sortable": true,
+                    "forceExport": true,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_type) {
+                            if (row.object_service_url) {
+                                return `<a href="${row.object_service_url}" target="_blank">${row.object_type}</a>`;
+                            } else {
+                                return row.object_type;
+                            }
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object_console_url",
+                    "title": "Console URL",
+                    "forceExport": true,
+                    "visible": false,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_console_url) {
+                            return row.object_console_url;
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object",
+                    "title": "Object",
+                    "sortable": true,
+                    "forceHide": true,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_id) {
+                            let display;
+                            if (row.object_name) {
+                                display = `${row.object_id} (${row.object_name})`;
+                            } else {
+                                display = row.object_id;
+                            }
+                            if (row.object_console_url) {
+                                return `<a href="${row.object_console_url}" target="_blank">${display}</a>`;
+                            } else {
+                                return display;
+                            }
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object_id",
+                    "title": "ID",
+                    "sortable": true,
+                    "forceExport": true,
+                    "visible": false,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_id) {
+                            if (row.object_console_url) {
+                                return `<a href="${row.object_console_url}" target="_blank">${row.object_id}</a>`;
+                            } else {
+                                return row.object_id;
+                            }
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object_name",
+                    "title": "Name",
+                    "sortable": true,
+                    "forceExport": true,
+                    "visible": false,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_name) {
+                            if (row.object_console_url) {
+                                return `<a href="${row.object_console_url}" target="_blank">${row.object_name}</a>`;
+                            } else {
+                                return row.object_name;
+                            }
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object_tag_project",
+                    "title": "Project",
+                    "sortable": true,
+                    "forceExport": true,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_tag_project) {
+                            return row.object_tag_project;
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object_tag_environment",
+                    "title": "Environment",
+                    "sortable": true,
+                    "forceExport": true,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_tag_environment) {
+                            return row.object_tag_environment;
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+                {
+                    "field": "object_description",
+                    "title": "Description",
+                    "sortable": true,
+                    "forceExport": true,
+                    "visible": false,
+                    "formatter": function(value, row, index, field) {
+                        if (row.object_description) {
+                            return row.object_description;
+                        }
+                        else {
+                            return "";
+                        }
+                    },
+                },
+            ],
+            search: true,
+            showColumns: true,
+            showColumnsToggleAll: true,
+            sortable: true,
+            showExport: true,
+        });
+    });
+
+</script>
+
+</body>
+</html>
