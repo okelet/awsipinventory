@@ -40,7 +40,7 @@ and tries to guess to what service and object the interface is attached to; this
 to know it, and this must be guessed using regexs and string comparison using the interface description or the requester property.
 
 Keep in mind that some network interfaces are ephemeral, i.e. they live only for a short period of time, like the ones used in Lambda,
-in ECS tasks, etc. Others have a longer life, like the ones used in "static" EC2 instances.
+ECS tasks, etc. Others have a longer life, like the ones used in "static" EC2 instances.
 
 ## Installation
 
@@ -104,6 +104,62 @@ From local development environment or cloned repository:
 pipenv run python -m awsipinventory
 ```
 
+## Output examples
+
+Console table:
+
+```text
++-----------------------+----------+--------------------------+--------------------+--------------------+-------------------+-------------+--------------------------------------+------------------------------+---------+-------------+
+|                VPC ID | VPC name |                Subnet ID |        Subnet name | Private IP address | Public IP address |    Type     |                  ID                  |             Name             | Project | Environment |
++-----------------------+----------+--------------------------+--------------------+--------------------+-------------------+-------------+--------------------------------------+------------------------------+---------+-------------+
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |   52.xx.xxx.xxx   |     ec2     |              i-xxxxxxxx              |       xxxxxxxxxxxxxxx        |  xxxxx  |     PRO     |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |   52.0.xxx.xxx    |     ec2     |              i-xxxxxxxx              |       xxxxxxxxxxxxxxx        |  xxxxx  |     DEV     |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xx     |  54.xxx.xxx.xxx   |  workspace  |             ws-xxxxxxxxx             |           xxxxxxx            |         |             |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |  34.xxx.xxx.xxx   |  workspace  |             ws-xxxxxxxxx             |            xxxxxx            |         |             |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |                   |  directory  |             d-xxxxxxxxxx             |            xxxxx             |         |             |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |                   |     rds     |           xxxxxxxxxxxxxxx            |                              |   xxx   |   PRE/DEV   |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |                   |  directory  |             d-xxxxxxxxxx             |            xxxxx             |         |             |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xx     |   23.xx.xxx.xxx   | nat_gateway |        nat-xxxxxxxxxxxxxxx           |            xxxxx             |         |             |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |                   |     rds     |           xxxxxxxxxxxxxxx            |                              |         |             |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |                   |     rds     |           xxxxxxxxxxxxxxx            |                              |   xxx   |     PRO     |
+| vpc-xxxxxxxx          | xxx      | subnet-xxxxxxxx          | xxxxxxxxx          |    10.xxx.x.xxx    |                   |     dms     |                                      |                              |         |             |
+```
+
+JSON:
+
+```json
+[
+    {
+        "region": "us-east-1",
+        "interface_id": "eni-xxxxxxxxxxxxxxxxx",
+        "interface_type": "interface",
+        "interface_description": "Primary network interface",
+        "interface_requested_id": null,
+        "interface_status": "in-use",
+        "vpc_id": "vpc-xxxxxxxx",
+        "vpc_name": "xxx",
+        "vpc_link": "https://console.aws.amazon.com/vpc/home?region=us-east-1#vpcs:VpcId=vpc-xxxxxxxx;sort=VpcId",
+        "subnet_id": "subnet-xxxxxxxx",
+        "subnet_name": "XXXXXX",
+        "subnet_link": "https://console.aws.amazon.com/vpc/home?region=us-east-1#subnets:SubnetId=subnet-xxxxxxxx;sort=SubnetId",
+        "private_ip_address": "10.xxx.x.xx",
+        "public_ip_address": "52.xx.xxx.xx",
+        "object_type": "ec2",
+        "object_id": "i-xxxxxxxxxxxxxxxxx",
+        "object_name": "XXXXXXX",
+        "object_tag_project": null,
+        "object_tag_environment": "PRO",
+        "object_description": null,
+        "object_console_url": "https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Instances:search=i-xxxxxxxxxxxxxxxxx;sort=instanceId",
+        "object_service_url": "https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Instances:"
+    }
+]
+```
+
+HTML:
+
+![img.png](output_html.png)
+
 ## Testing package deployment
 
 Set credential environment variables manually, or using another tool, like [AWSume](https://github.com/trek10inc/awsume); then test the application
@@ -111,6 +167,7 @@ using Docker directly:
 
 ```bash
 docker build -t awsipinventory:latest .
+awsume xxx
 docker run -it --rm -e AWS_DEFAULT_REGION -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN awsipinventory:latest --log-level debug -f json
 ```
 
