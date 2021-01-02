@@ -1,4 +1,5 @@
 import argparse
+import csv
 import ipaddress
 import json
 import logging
@@ -10,6 +11,7 @@ import time
 from dataclasses import dataclass
 from pprint import pprint
 from typing import Optional, List, Dict, Tuple
+from typing.io import IO
 
 import boto3
 import jinja2
@@ -429,7 +431,10 @@ class AwsIpAddress:
         }
 
 
-def main(logger: logging.Logger, format: Optional[str], output: Optional[str], regions: Optional[List[str]], vpc_ids: Optional[List[str]], subnet_ids: Optional[List[str]], columns: Optional[List[str]]):
+def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[IO[str]] = None, regions: Optional[List[str]] = None, vpc_ids: Optional[List[str]] = None, subnet_ids: Optional[List[str]] = None):
+
+    if output is None:
+        output = sys.stdout
 
     default_session = boto3.session.Session()
     default_ec2_client = default_session.client("ec2")
@@ -520,7 +525,7 @@ def main(logger: logging.Logger, format: Optional[str], output: Optional[str], r
             headers.insert(0, "Region")
 
         data = []
-        for x in sorted(ip_addresses.ip_list, key=lambda ip: [ip.region, ip.vpc_name, ip.private_ip_address]):
+        for x in sorted(ip_addresses.ip_list, key=lambda ip: [ip.region, ip.vpc_name or "", ip.private_ip_address]):
             ip_data = [
                 x.vpc_id,
                 x.vpc_name,
@@ -543,7 +548,7 @@ def main(logger: logging.Logger, format: Optional[str], output: Optional[str], r
             headers=headers,
             tablefmt="pretty",
             colalign="left",
-        ))
+        ), file=output)
 
     elif format == "html":
 
@@ -559,14 +564,20 @@ def main(logger: logging.Logger, format: Optional[str], output: Optional[str], r
         ), file=output)
 
     elif format == "json":
-        print(json.dumps([x.to_dict() for x in ip_addresses.ip_list], indent=4))
+        json.dump([x.to_dict() for x in ip_addresses.ip_list], output, indent=4)
 
     elif format in ["yaml", "yml"]:
-        yaml.dump([x.to_dict() for x in ip_addresses.ip_list], sys.stdout)
+        yaml.dump([x.to_dict() for x in ip_addresses.ip_list], output)
 
     elif format == "csv":
 
         print(f"Output format {format} not yet implemented", file=sys.stderr)
+        writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+        if ip_addresses.ip_list:
+            # Header
+            writer.writerow(ip_addresses.ip_list[0].to_dict().keys())
+            # Data
+            writer.writerows([x.to_dict().values() for x in ip_addresses.ip_list])
 
     elif format == "none":
         # Do not output nothing (useful when debugging)
@@ -585,13 +596,12 @@ def cli():
     parser.add_argument("--regions", nargs="*", help="Use \"all\" to get data from all enabled regions")
     parser.add_argument("--vpcs", nargs="*", help="Restrict results to specific VPCs (must exist in the account and regions)")
     parser.add_argument("--subnets", nargs="*", help="Restrict results to specific subnets (must exist in the account, VPCs and regions)")
-    parser.add_argument("--columns", nargs="*")
     args = parser.parse_args()
 
     logger.setLevel(getattr(logging, args.log_level))
 
     try:
-        main(logger, args.format, args.output, args.regions, args.vpcs, args.subnets, args.columns)
+        main(logger, args.format, args.output, args.regions, args.vpcs, args.subnets)
     except InvalidRegionException as ex:
         print(str(ex), file=sys.stderr)
         sys.exit(1)
