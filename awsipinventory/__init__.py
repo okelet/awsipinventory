@@ -1,5 +1,6 @@
 import argparse
 import csv
+import dataclasses
 import ipaddress
 import json
 import logging
@@ -84,13 +85,13 @@ class AwsIpAddressList:
             vpc_name=self.get_vpc_name(aws_session, vpc_id),
             subnet_id=subnet_id,
             subnet_name=self.get_subnet_name(aws_session, subnet_id),
-            private_ip_address=private_ip_address,
-            public_ip_address=public_ip_address,
             interface_id=interface_id,
             interface_status=interface_status,
             interface_type=interface_type,
             interface_requested_id=interface_requester_id,
             interface_description=description,
+            private_ip_address=private_ip_address,
+            public_ip_address=public_ip_address,
         )
 
         # Try to guess the object type
@@ -102,10 +103,9 @@ class AwsIpAddressList:
             ip_address.object_id = instance_id
             ip_address.object_console_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#Instances:search={instance_id};sort=instanceId"
             instance_data = None
-            for page in aws_session.client("ec2").get_paginator("describe_instances").paginate(InstanceIds=[instance_id]):
-                for reservation in page.get("Reservations"):
-                    for instance in reservation.get("Instances"):
-                        instance_data = instance
+            for reservation in aws_session.client("ec2").get_paginator("describe_instances").paginate(InstanceIds=[instance_id]).build_full_result().get("Reservations"):
+                for instance in reservation.get("Instances"):
+                    instance_data = instance
             if instance_data:
                 ip_address.object_name = get_tag_value(instance_data.get("Tags"), "name")
                 ip_address.object_tag_project = get_tag_value(instance_data.get("Tags"), "project")
@@ -179,20 +179,19 @@ class AwsIpAddressList:
 
             # Search for any instance whose reolved endpoint is the same as the public/private ip address
             # of the interface (depending if the instance is publicly accessible or not)
-            for page in aws_session.client("rds").get_paginator("describe_db_instances").paginate():
-                for db_instance in page.get("DBInstances"):
-                    public = db_instance.get("PubliclyAccessible")
-                    if db_instance.get("DBSubnetGroup", {}).get("VpcId") == vpc_id:
-                        endpoint = db_instance.get("Endpoint", {}).get("Address")
-                        if endpoint:
-                            endpoint_ip = socket.gethostbyname(endpoint)
-                            if endpoint_ip:
-                                if public and public_ip_address and endpoint_ip == public_ip_address:
-                                    instance_data = db_instance
-                                    break
-                                elif not public and private_ip_address and endpoint_ip == private_ip_address:
-                                    instance_data = db_instance
-                                    break
+            for db_instance in aws_session.client("rds").get_paginator("describe_db_instances").paginate().build_full_result().get("DBInstances"):
+                public = db_instance.get("PubliclyAccessible")
+                if db_instance.get("DBSubnetGroup", {}).get("VpcId") == vpc_id:
+                    endpoint = db_instance.get("Endpoint", {}).get("Address")
+                    if endpoint:
+                        endpoint_ip = socket.gethostbyname(endpoint)
+                        if endpoint_ip:
+                            if public and public_ip_address and endpoint_ip == public_ip_address:
+                                instance_data = db_instance
+                                break
+                            elif not public and private_ip_address and endpoint_ip == private_ip_address:
+                                instance_data = db_instance
+                                break
             if instance_data:
                 ip_address.object_id = instance_data.get("DBInstanceIdentifier")
                 arn = instance_data.get("DBInstanceArn")
@@ -214,13 +213,9 @@ class AwsIpAddressList:
                 logger.debug(f"  Loading ECS task cache for region {region}...")
                 ecs_task_start = time.time()
                 self.ecs_task_cache[region] = {}
-                cluster_arns = []
-                for cluster_page in aws_session.client("ecs").get_paginator("list_clusters").paginate():
-                    cluster_arns.extend(cluster_page.get("clusterArns"))
+                cluster_arns = aws_session.client("ecs").get_paginator("list_clusters").paginate().build_full_result().get("clusterArns")
                 for cluster_arn in cluster_arns:
-                    task_arns = []
-                    for page in aws_session.client("ecs").get_paginator("list_tasks").paginate(cluster=cluster_arn):
-                        task_arns.extend(page.get("taskArns"))
+                    task_arns = aws_session.client("ecs").get_paginator("list_tasks").paginate(cluster=cluster_arn).build_full_result().get("taskArns")
                     for chunk in chunks(task_arns, 100):
                         for task in aws_session.client("ecs").describe_tasks(cluster=cluster_arn, tasks=list(chunk)).get("tasks"):
                             task_group = task.get("group")
@@ -252,13 +247,12 @@ class AwsIpAddressList:
             ip_address.object_type = OBJECT_TYPE_NAT_GATEWAY
             ip_address.object_service_url = f"https://console.aws.amazon.com/vpc/home?region={region}#NatGateways:"
             ip_address.object_id = re.sub("^Interface for NAT Gateway ", "", description)
-            for page in aws_session.client("ec2").get_paginator("describe_nat_gateways").paginate(NatGatewayIds=[ip_address.object_id]):
-                for nat_gateway in page.get("NatGateways"):
-                    tags = nat_gateway.get("Tags")
-                    ip_address.object_name = get_tag_value(tags, "name")
-                    ip_address.object_tag_project = get_tag_value(tags, "project")
-                    ip_address.object_tag_environment = get_tag_value(tags, "environment")
-                    ip_address.object_description = get_tag_value(tags, "description")
+            for nat_gateway in aws_session.client("ec2").get_paginator("describe_nat_gateways").paginate(NatGatewayIds=[ip_address.object_id]).build_full_result().get("NatGateways"):
+                tags = nat_gateway.get("Tags")
+                ip_address.object_name = get_tag_value(tags, "name")
+                ip_address.object_tag_project = get_tag_value(tags, "project")
+                ip_address.object_tag_environment = get_tag_value(tags, "environment")
+                ip_address.object_description = get_tag_value(tags, "description")
             ip_address.object_console_url = f"https://console.aws.amazon.com/vpc/home?region={region}#NatGatewayDetails:natGatewayId={ip_address.object_id}"
 
         elif description and description.startswith("EFS mount target for fs-"):
@@ -282,10 +276,9 @@ class AwsIpAddressList:
             ip_address.object_service_url = f"https://console.aws.amazon.com/directoryservicev2/home?region={region}#!/directories"
             ip_address.object_id = re.sub("^AWS created network interface for directory ", "", description)
             ip_address.object_console_url = f"https://console.aws.amazon.com/directoryservicev2/home?region={region}#!/directories/{ip_address.object_id}"
-            for page in aws_session.client("ds").get_paginator('describe_directories').paginate(DirectoryIds=[ip_address.object_id]):
-                for directory in page.get("DirectoryDescriptions"):
-                    ip_address.object_name = directory.get("ShortName")
-                    ip_address.object_description = directory.get("Description")
+            for directory in aws_session.client("ds").get_paginator('describe_directories').paginate(DirectoryIds=[ip_address.object_id]).build_full_result().get("DirectoryDescriptions"):
+                ip_address.object_name = directory.get("ShortName")
+                ip_address.object_description = directory.get("Description")
             # TODO: Load tags
 
         elif description and description.startswith("Created By Amazon Workspaces for AWS Account ID"):
@@ -293,15 +286,14 @@ class AwsIpAddressList:
             ip_address.object_type = OBJECT_TYPE_WORKSPACE
             ip_address.object_service_url = f"https://console.aws.amazon.com/workspaces/home?region={region}#listworkspaces:"
             workspaces_client = aws_session.client("workspaces")
-            for page in workspaces_client.get_paginator("describe_workspaces").paginate():
-                for workspace_data in page.get("Workspaces"):
-                    if workspace_data.get("SubnetId") == subnet_id and workspace_data.get("IpAddress") == private_ip_address:
-                        ip_address.object_id = workspace_data.get("WorkspaceId")
-                        ip_address.object_name = workspace_data.get("UserName")
-                        ip_address.object_console_url = f"https://console.aws.amazon.com/workspaces/home?region={region}#listworkspaces:search={ip_address.object_id}"
-                        tags = workspaces_client.describe_tags(ResourceId=workspace_data.get("WorkspaceId")).get("TagList")
-                        ip_address.object_tag_project = get_tag_value(tags, "project")
-                        ip_address.object_tag_environment = get_tag_value(tags, "environment")
+            for workspace_data in workspaces_client.get_paginator("describe_workspaces").paginate().build_full_result().get("Workspaces"):
+                if workspace_data.get("SubnetId") == subnet_id and workspace_data.get("IpAddress") == private_ip_address:
+                    ip_address.object_id = workspace_data.get("WorkspaceId")
+                    ip_address.object_name = workspace_data.get("UserName")
+                    ip_address.object_console_url = f"https://console.aws.amazon.com/workspaces/home?region={region}#listworkspaces:search={ip_address.object_id}"
+                    tags = workspaces_client.describe_tags(ResourceId=workspace_data.get("WorkspaceId")).get("TagList")
+                    ip_address.object_tag_project = get_tag_value(tags, "project")
+                    ip_address.object_tag_environment = get_tag_value(tags, "environment")
 
         elif description and description.startswith("AWS Lambda VPC "):
             # Description is like
@@ -379,13 +371,15 @@ class AwsIpAddress:
     vpc_name: Optional[str]
     subnet_id: str
     subnet_name: Optional[str]
-    private_ip_address: str
-    public_ip_address: Optional[str]
-    interface_description: Optional[str]
+
     interface_id: str
     interface_status: str
     interface_type: str
     interface_requested_id: str
+    interface_description: Optional[str]
+
+    private_ip_address: str
+    public_ip_address: Optional[str]
 
     object_type: Optional[str] = None
     object_id: Optional[str] = None
@@ -396,39 +390,24 @@ class AwsIpAddress:
     object_console_url: Optional[str] = None
     object_service_url: Optional[str] = None
 
+    vpc_link: Optional[str] = Optional[str]
+    subnet_link: Optional[str] = Optional[str]
+
     @property
-    def vpc_link(self):
+    def vpc_link(self) -> str:
         return f"https://console.aws.amazon.com/vpc/home?region={self.region}#vpcs:VpcId={self.vpc_id};sort=VpcId"
 
+    @vpc_link.setter
+    def vpc_link(self, _val):
+        pass
+
     @property
-    def subnet_link(self):
+    def subnet_link(self) -> str:
         return f"https://console.aws.amazon.com/vpc/home?region={self.region}#subnets:SubnetId={self.subnet_id};sort=SubnetId"
 
-    def to_dict(self):
-        return {
-            "region": self.region,
-            "interface_id": self.interface_id,
-            "interface_type": self.interface_type,
-            "interface_description": self.interface_description,
-            "interface_requested_id": self.interface_requested_id,
-            "interface_status": self.interface_status,
-            "vpc_id": self.vpc_id,
-            "vpc_name": self.vpc_name,
-            "vpc_link": self.vpc_link,
-            "subnet_id": self.subnet_id,
-            "subnet_name": self.subnet_name,
-            "subnet_link": self.subnet_link,
-            "private_ip_address": self.private_ip_address,
-            "public_ip_address": self.public_ip_address,
-            "object_type": self.object_type,
-            "object_id": self.object_id,
-            "object_name": self.object_name,
-            "object_tag_project": self.object_tag_project,
-            "object_tag_environment": self.object_tag_environment,
-            "object_description": self.object_description,
-            "object_console_url": self.object_console_url,
-            "object_service_url": self.object_service_url,
-        }
+    @subnet_link.setter
+    def subnet_link(self, _val):
+        pass
 
 
 def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[IO[str]] = None, regions: Optional[List[str]] = None, vpc_ids: Optional[List[str]] = None, subnet_ids: Optional[List[str]] = None):
@@ -450,11 +429,10 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
                 account_allowed_regions.append(region_data.get("RegionName"))
 
         ec2_regions = []
-        for page in default_ssm_client.get_paginator('get_parameters_by_path').paginate(Path=f"/aws/service/global-infrastructure/services/ec2/regions"):
-            for parameter in page.get("Parameters", []):
-                region = parameter.get("Value")
-                if region in account_allowed_regions:
-                    ec2_regions.append(region)
+        for parameter in default_ssm_client.get_paginator('get_parameters_by_path').paginate(Path=f"/aws/service/global-infrastructure/services/ec2/regions").build_full_result().get("Parameters"):
+            region = parameter.get("Value")
+            if region in account_allowed_regions:
+                ec2_regions.append(region)
 
         if "all" in regions:
             regions_to_process = ec2_regions
@@ -473,10 +451,9 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
 
     logger.debug("Loading account alias...")
     account_alias = None
-    for page in default_session.client("iam").get_paginator("list_account_aliases").paginate():
-        if page.get("AccountAliases"):
-            account_alias = page.get("AccountAliases")[0]
-            break
+    account_aliases = default_session.client("iam").get_paginator("list_account_aliases").paginate().build_full_result().get("AccountAliases")
+    if account_aliases:
+        account_alias = account_aliases[0]
 
     ip_addresses = AwsIpAddressList()
 
@@ -490,14 +467,11 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client.describe_network_interfaces
         logger.debug(f"Loading network interfaces...")
         args = {"Filters": []}
-        network_interfaces = []
         if vpc_ids:
             args["Filters"].append({"Name": "vpc-id", "Values": vpc_ids})
         if subnet_ids:
             args["Filters"].append({"Name": "subnet-id", "Values": subnet_ids})
-        for page in ec2_client.get_paginator('describe_network_interfaces').paginate(**args):
-            for interface_data in page.get("NetworkInterfaces", []):
-                network_interfaces.append(interface_data)
+        network_interfaces = ec2_client.get_paginator('describe_network_interfaces').paginate(**args).build_full_result().get("NetworkInterfaces")
         logger.debug(f"Loaded {len(network_interfaces)} interfaces.")
 
         for idx, interface_data in enumerate(network_interfaces, 1):
@@ -557,27 +531,23 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
         print(templateEnv.get_template("inventory.html").render(
             account_id=account_id,
             account_alias=account_alias,
-            data=[x.to_dict() for x in ip_addresses.ip_list],
+            data=[dataclasses.asdict(x) for x in ip_addresses.ip_list],
             regions=regions_to_process,
             vpcs=vpc_ids,
             subnets=subnet_ids,
         ), file=output)
 
     elif format == "json":
-        json.dump([x.to_dict() for x in ip_addresses.ip_list], output, indent=4)
+        json.dump([dataclasses.asdict(x) for x in ip_addresses.ip_list], output, indent=4)
 
     elif format in ["yaml", "yml"]:
-        yaml.dump([x.to_dict() for x in ip_addresses.ip_list], output)
+        yaml.dump([dataclasses.asdict(x) for x in ip_addresses.ip_list], output)
 
     elif format == "csv":
 
-        print(f"Output format {format} not yet implemented", file=sys.stderr)
         writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
-        if ip_addresses.ip_list:
-            # Header
-            writer.writerow(ip_addresses.ip_list[0].to_dict().keys())
-            # Data
-            writer.writerows([x.to_dict().values() for x in ip_addresses.ip_list])
+        writer.writerow([x.name for x in  dataclasses.fields(AwsIpAddress)])
+        writer.writerows([dataclasses.asdict(x).values() for x in ip_addresses.ip_list])
 
     elif format == "none":
         # Do not output nothing (useful when debugging)
