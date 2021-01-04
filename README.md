@@ -47,24 +47,33 @@ ECS tasks, etc. Others have a longer life, like the ones used in "static" EC2 in
 Using [pip](https://pip.pypa.io/en/stable/):
 
 ```bash
-pip install --user git+https://github.com/okelet/awsipinventory
+pip install --user --force-reinstall --ignore-installed https://github.com/okelet/awsipinventory/archive/main.tar.gz
 ```
 
 Cloning the repository:
 
 ```bash
+pip install pipenv --user
 git clone https://github.com/okelet/awsipinventory
+cd awsipinventory
+pipenv install
 ```
 
 ## Usage
 
+Remember to add `~/.local/bin` to your path if not already done:
+
+```bash
+export PATH=${PATH}:${HOME}/.local/bin
+```
+
 ```text
-usage: __main__.py [-h] [-l {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
-                   [-f {none,table,html,json,yaml,yml,csv}] [-o OUTPUT]
-                   [--regions [REGIONS [REGIONS ...]]]
-                   [--vpcs [VPCS [VPCS ...]]]
-                   [--subnets [SUBNETS [SUBNETS ...]]]
-                   [--columns [COLUMNS [COLUMNS ...]]]
+usage: awsipinventory [-h] [-l {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+                      [-f {none,table,html,json,yaml,yml,csv}] [-o OUTPUT]
+                      [--regions [REGIONS [REGIONS ...]]]
+                      [--vpcs [VPCS [VPCS ...]]]
+                      [--subnets [SUBNETS [SUBNETS ...]]]
+                      [--columns [COLUMNS [COLUMNS ...]]]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -82,7 +91,6 @@ optional arguments:
   --subnets [SUBNETS [SUBNETS ...]]
                         Restrict results to specific subnets (must exist in
                         the account, VPCs and regions)
-  --columns [COLUMNS [COLUMNS ...]]
 ```
 
 Running from an standard Linux:
