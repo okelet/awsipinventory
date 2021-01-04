@@ -34,6 +34,10 @@ Supported services:
 * [x] Lambda
 * [x] CodeBuild (only service, not object)
 * [x] API Gateway VPC link
+* [x] VPC endpoints
+* [x] Route53 Resolver
+* [x] Transit Gateway
+* [x] RDS Proxy
 
 Internally, the script gets the list of [network interfaces](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client.describe_network_interfaces),
 and tries to guess to what service and object the interface is attached to; this is not always possible, because there is no a direct property

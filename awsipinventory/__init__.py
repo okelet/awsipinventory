@@ -10,16 +10,16 @@ import socket
 import sys
 import time
 from dataclasses import dataclass
-from pprint import pprint
-from typing import Optional, List, Dict, Tuple
+from pprint import pprint, pformat
+from typing import Optional, List, Dict, Any
 from typing.io import IO
 
 import boto3
 import jinja2
 import yaml
-from botocore.exceptions import ClientError
 from tabulate import tabulate
 
+INTERFACE_AVAILABLE = "available"
 OBJECT_TYPE_UNKNOWN = "unknown"
 OBJECT_TYPE_INSTANCE = "ec2"
 OBJECT_TYPE_ELASTICACHE = "elasticache"
@@ -35,6 +35,10 @@ OBJECT_TYPE_CODEBUILD = "codebuild"
 OBJECT_TYPE_WORKSPACE = "workspace"
 OBJECT_TYPE_API_GATEWAY_VPC_LINK = "api_gateway_vpc_link"
 OBJECT_TYPE_DMS = "dms"
+OBJECT_TYPE_VPC_ENDPOINT = "vpc_endpoint"
+OBJECT_TYPE_ROUTE53_RESOLVER = "route53_resolver"
+OBJECT_TYPE_TRANSIT_GATEWAY = "transit_gateway"
+OBJECT_TYPE_RDS_PROXY = "rds_proxy"
 
 
 def chunks(lst, n):
@@ -61,9 +65,18 @@ class AwsIpAddressList:
 
     def __init__(self):
         self.ip_list: List[AwsIpAddress] = []
-        self.vpc_cache: Dict[str, Optional[str]] = {}
-        self.subnet_cache: Dict[str, Optional[str]] = {}
-        self.ecs_task_cache: Dict[str, Tuple[str, str]] = {}
+        self.vpc_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.subnet_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.ec2_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.load_balancers_v1_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.load_balancers_v2_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.rds_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.ecs_clusters_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.ecs_tasks_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.lambda_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.route53_resolvers_endpoints_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.transit_gateway_attachments_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
+        self.transit_gateway_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
 
     def add_from_data(self, logger: logging.Logger, aws_session, interface_data):
 
@@ -95,17 +108,25 @@ class AwsIpAddressList:
         )
 
         # Try to guess the object type
-        if instance_id:
+        if interface_status == "available":
+            ip_address.object_type = INTERFACE_AVAILABLE
+
+        elif instance_id:
             # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html
             logger.debug(f"  Detected EC2 instance; loading info...")
             ip_address.object_type = OBJECT_TYPE_INSTANCE
             ip_address.object_service_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#Instances:"
             ip_address.object_id = instance_id
             ip_address.object_console_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#Instances:search={instance_id};sort=instanceId"
-            instance_data = None
-            for reservation in aws_session.client("ec2").get_paginator("describe_instances").paginate(InstanceIds=[instance_id]).build_full_result().get("Reservations"):
-                for instance in reservation.get("Instances"):
-                    instance_data = instance
+            if self.ec2_cache_by_region.get(aws_session.region_name) is None:
+                logger.debug(f"  Caching EC2 instances for region {region}...")
+                start = time.time()
+                self.ec2_cache_by_region[aws_session.region_name] = []
+                for reservation in aws_session.client("ec2").get_paginator("describe_instances").paginate().build_full_result().get("Reservations"):
+                    self.ec2_cache_by_region[aws_session.region_name].extend(reservation.get("Instances"))
+                logger.debug(f"  EC2 instances cache loaded in {(time.time() - start):.2f} secs.")
+
+            instance_data = next((x for x in self.ec2_cache_by_region[aws_session.region_name] if x.get("InstanceId") == instance_id), None)
             if instance_data:
                 ip_address.object_name = get_tag_value(instance_data.get("Tags"), "name")
                 ip_address.object_tag_project = get_tag_value(instance_data.get("Tags"), "project")
@@ -122,7 +143,7 @@ class AwsIpAddressList:
             # ip_address.object_console_url = f"https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#LoadBalancers:search={load_balancer_name};sort=loadBalancerName"
             # TODO: Load tags
 
-        elif interface_requester_id == "amazon-elb" and description:
+        elif description and description.startswith("ELB "):
             # Description can be like:
             # - ELB awseb-e-u-AWSEBLoa-zzz (classic)
             # - ELB app/awseb-AWSEB-xxx/yyy -> only awseb-... is the real name (application)
@@ -131,29 +152,38 @@ class AwsIpAddressList:
             ip_address.object_service_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#LoadBalancers:sort=loadBalancerName"
             load_balancer_name = re.sub("^ELB ", "", description)
 
-            tags = None
-            if load_balancer_name.startswith("app/"):
+            if load_balancer_name.startswith("app/") or load_balancer_name.startswith("net/"):
                 load_balancer_name = load_balancer_name.split("/")[1]
                 ip_address.object_type = OBJECT_TYPE_ELBv2
-                elb_v2_client = aws_session.client("elbv2")
-                load_balancers = elb_v2_client.get_paginator('describe_load_balancers').paginate(Names=[load_balancer_name]).build_full_result().get("LoadBalancers")
-                if load_balancers:
-                    load_balancer = load_balancers[0]
-                    load_balancer_arn = load_balancer.get("LoadBalancerArn")
-                    tags = elb_v2_client.describe_tags(ResourceArns=[load_balancer_arn]).get("TagDescriptions")[0].get("Tags")
+                if self.load_balancers_v2_cache_by_region.get(aws_session.region_name) is None:
+                    logger.debug(f"  Caching ELBv2 for region {region}...")
+                    start = time.time()
+                    elb_v2_client = aws_session.client("elbv2")
+                    self.load_balancers_v2_cache_by_region[aws_session.region_name] = elb_v2_client.get_paginator('describe_load_balancers').paginate().build_full_result().get("LoadBalancers")
+                    for chunk in chunks(self.load_balancers_v2_cache_by_region[aws_session.region_name], 20):
+                        for balancer_tags in elb_v2_client.describe_tags(ResourceArns=[x.get("LoadBalancerArn") for x in chunk]).get("TagDescriptions"):
+                            next((x for x in self.load_balancers_v2_cache_by_region[aws_session.region_name] if x.get("LoadBalancerArn") == balancer_tags.get("ResourceArn")))["Tags"] = balancer_tags.get("Tags")
+                    logger.debug(f"  ELBv2 cache loaded in {(time.time() - start):.2f} secs.")
+                load_balancer = next((x for x in self.load_balancers_v2_cache_by_region.get(aws_session.region_name) if x.get("LoadBalancerName") == load_balancer_name), None)
             else:
-                elb_client = aws_session.client("elb")
-                # Get the load balancer to ensure that it exists
-                load_balancers = elb_client.get_paginator("describe_load_balancers").paginate(LoadBalancerNames=[load_balancer_name]).build_full_result().get("LoadBalancerDescriptions")
-                if load_balancers:
-                    tags = elb_client.describe_tags(LoadBalancerNames=[load_balancer_name]).get("TagDescriptions")[0].get("Tags")
+                if self.load_balancers_v1_cache_by_region.get(aws_session.region_name) is None:
+                    logger.debug(f"  Caching ELBv1 for region {region}...")
+                    start = time.time()
+                    elb_v1_client = aws_session.client("elb")
+                    self.load_balancers_v1_cache_by_region[aws_session.region_name] = elb_v1_client.get_paginator('describe_load_balancers').paginate().build_full_result().get("LoadBalancerDescriptions")
+                    for chunk in chunks(self.load_balancers_v1_cache_by_region[aws_session.region_name], 20):
+                        for balancer_tags in elb_v1_client.describe_tags(LoadBalancerNames=[x.get("LoadBalancerName") for x in chunk]).get("TagDescriptions"):
+                            next((x for x in self.load_balancers_v1_cache_by_region[aws_session.region_name] if x.get("LoadBalancerName") == balancer_tags.get("LoadBalancerName")))["Tags"] = balancer_tags.get("Tags")
+                    logger.debug(f"  ELBv1 cache loaded in {(time.time() - start):.2f} secs.")
+                load_balancer = next((x for x in self.load_balancers_v1_cache_by_region.get(aws_session.region_name) if x.get("LoadBalancerName") == load_balancer_name), None)
 
-            ip_address.object_tag_project = get_tag_value(tags, "project")
-            ip_address.object_tag_environment = get_tag_value(tags, "environment")
-            if load_balancer_name.startswith("awseb-"):
-                # This a LB associated with an Elastic Beanstalk environment
-                # Load name from tag elasticbeanstalk:environment-name, that contains the environment name
-                ip_address.object_name = get_tag_value(tags, "elasticbeanstalk:environment-name")
+            if load_balancer:
+                ip_address.object_tag_project = get_tag_value(load_balancer["Tags"], "project")
+                ip_address.object_tag_environment = get_tag_value(load_balancer["Tags"], "environment")
+                if load_balancer_name.startswith("awseb-"):
+                    # This a LB associated with an Elastic Beanstalk environment
+                    # Load name from tag elasticbeanstalk:environment-name, that contains the environment name
+                    ip_address.object_name = get_tag_value(load_balancer["Tags"], "elasticbeanstalk:environment-name")
 
             ip_address.object_id = load_balancer_name
             ip_address.object_console_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#LoadBalancers:search={load_balancer_name};sort=loadBalancerName"
@@ -175,11 +205,17 @@ class AwsIpAddressList:
             logger.debug(f"  Detected RDS instance; loading info...")
             ip_address.object_type = OBJECT_TYPE_RDS
             ip_address.object_service_url = f"https://console.aws.amazon.com/rds/home?region={region}#"
-            instance_data = None
 
-            # Search for any instance whose reolved endpoint is the same as the public/private ip address
+            if self.rds_cache_by_region.get(aws_session.region_name) is None:
+                logger.debug(f"  Caching basic RDS instances information for region {region}...")
+                start = time.time()
+                self.rds_cache_by_region[aws_session.region_name] = aws_session.client("rds").get_paginator("describe_db_instances").paginate().build_full_result().get("DBInstances")
+                logger.debug(f"  Basic RDS instances information cache loaded in {(time.time() - start):.2f} secs.")
+
+            # Search for any instance whose resolved endpoint is the same as the public/private ip address
             # of the interface (depending if the instance is publicly accessible or not)
-            for db_instance in aws_session.client("rds").get_paginator("describe_db_instances").paginate().build_full_result().get("DBInstances"):
+            instance_data = None
+            for db_instance in self.rds_cache_by_region[aws_session.region_name]:
                 public = db_instance.get("PubliclyAccessible")
                 if db_instance.get("DBSubnetGroup", {}).get("VpcId") == vpc_id:
                     endpoint = db_instance.get("Endpoint", {}).get("Address")
@@ -192,6 +228,7 @@ class AwsIpAddressList:
                             elif not public and private_ip_address and endpoint_ip == private_ip_address:
                                 instance_data = db_instance
                                 break
+
             if instance_data:
                 ip_address.object_id = instance_data.get("DBInstanceIdentifier")
                 arn = instance_data.get("DBInstanceArn")
@@ -207,40 +244,35 @@ class AwsIpAddressList:
             ip_address.object_type = OBJECT_TYPE_ECS_TASK
             ip_address.object_service_url = f"https://console.aws.amazon.com/ecs/home?region={region}#/clusters"
             interface_id = description.split("/")[-1]
-            task_info = self.ecs_task_cache.get(region, {}).get(interface_id)
 
-            if not task_info and self.ecs_task_cache.get(region) is None:
-                logger.debug(f"  Loading ECS task cache for region {region}...")
+            if not self.ecs_tasks_cache_by_region.get(aws_session.region_name):
+                logger.debug(f"  Caching ECS tasks for region {region}...")
+                self.ecs_tasks_cache_by_region[aws_session.region_name] = []
                 ecs_task_start = time.time()
-                self.ecs_task_cache[region] = {}
-                cluster_arns = aws_session.client("ecs").get_paginator("list_clusters").paginate().build_full_result().get("clusterArns")
-                for cluster_arn in cluster_arns:
-                    task_arns = aws_session.client("ecs").get_paginator("list_tasks").paginate(cluster=cluster_arn).build_full_result().get("taskArns")
+                ecs_client = aws_session.client("ecs")
+                for cluster_arn in ecs_client.get_paginator("list_clusters").paginate().build_full_result().get("clusterArns"):
+                    task_arns = ecs_client.get_paginator("list_tasks").paginate(cluster=cluster_arn).build_full_result().get("taskArns")
                     for chunk in chunks(task_arns, 100):
-                        for task in aws_session.client("ecs").describe_tasks(cluster=cluster_arn, tasks=list(chunk)).get("tasks"):
-                            task_group = task.get("group")
-                            tags = task.get("tags")
-                            if task_group.startswith("service:"):
-                                task_group = task_group[8:]
-                            else:
-                                task_group = None
-                            for attachment in task.get("attachments"):
-                                self.ecs_task_cache[region][attachment.get("id")] = (cluster_arn, task_group, task.get("taskArn"), get_tag_value(tags, "project"), get_tag_value(tags, "environment"), get_tag_value(tags, "description"))
-                                if attachment.get("id") == interface_id:
-                                    # Don't break after finding the searched task, so we build the cache
-                                    task_info = self.ecs_task_cache[region][interface_id]
-                logger.debug(f"  ECS task cache loaded in {(time.time()-ecs_task_start):.2f} secs.")
+                        self.ecs_tasks_cache_by_region[aws_session.region_name].extend(ecs_client.describe_tasks(cluster=cluster_arn, tasks=list(chunk)).get("tasks"))
+                logger.debug(f"  ECS task cache loaded in {(time.time() - ecs_task_start):.2f} secs.")
 
-            if task_info:
-                (cluster_arn, task_group, task_arn, project, environment, description) = task_info
-                cluster_name = cluster_arn.split("/")[-1]
-                task_id = task_arn.split("/")[-1]
-                ip_address.object_id = task_id
-                ip_address.object_name = f"{cluster_name} / {task_group} / {task_id}"
-                ip_address.object_console_url = f"https://console.aws.amazon.com/ecs/home?region={region}#/clusters/{cluster_name}/tasks/{task_id}/details"
-                ip_address.object_tag_project = project
-                ip_address.object_tag_environment = environment
-                ip_address.object_description = description
+            for task in self.ecs_tasks_cache_by_region[aws_session.region_name]:
+                task_group = task.get("group")
+                if task_group.startswith("service:"):
+                    task_group = task_group[8:]
+                else:
+                    task_group = None
+                for attachment in task.get("attachments"):
+                    if attachment.get("id") == interface_id:
+                        tags = task.get("tags")
+                        cluster_name = task.get("clusterArn").split("/")[-1]
+                        task_id = task.get("taskArn").split("/")[-1]
+                        ip_address.object_id = task_id
+                        ip_address.object_name = f"{cluster_name} / {task_group} / {task_id}"
+                        ip_address.object_console_url = f"https://console.aws.amazon.com/ecs/home?region={region}#/clusters/{cluster_name}/tasks/{task_id}/details"
+                        ip_address.object_tag_project = get_tag_value(tags, "project")
+                        ip_address.object_tag_environment = get_tag_value(tags, "environment")
+                        ip_address.object_description = get_tag_value(tags, "description")
 
         elif description and description.startswith("Interface for NAT Gateway nat-"):
             logger.debug(f"  Detected NAT gateway; loading info...")
@@ -263,12 +295,12 @@ class AwsIpAddressList:
             ip_address.object_service_url = f"https://console.aws.amazon.com/efs/home?region={region}#/file-systems"
             ip_address.object_id = fs_id
             ip_address.object_console_url = f"https://console.aws.amazon.com/efs/home?region={region}#/file-systems/{fs_id}"
-            fs_data = aws_session.client("efs").describe_file_systems(FileSystemId=fs_id).get("FileSystems")
+            fs_data = next(iter(aws_session.client("efs").describe_file_systems(FileSystemId=fs_id).get("FileSystems")), None)
             if fs_data:
-                ip_address.object_name = fs_data[0].get("Name")
-                ip_address.object_tag_project = get_tag_value(fs_data[0].get("Tags"), "project")
-                ip_address.object_tag_environment = get_tag_value(fs_data[0].get("Tags"), "environment")
-                ip_address.object_description = get_tag_value(fs_data[0].get("Tags"), "description")
+                ip_address.object_name = fs_data.get("Name")
+                ip_address.object_tag_project = get_tag_value(fs_data.get("Tags"), "project")
+                ip_address.object_tag_environment = get_tag_value(fs_data.get("Tags"), "environment")
+                ip_address.object_description = get_tag_value(fs_data.get("Tags"), "description")
 
         elif description and description.startswith("AWS created network interface for directory d-"):
             logger.debug(f"  Detected Directory; loading info...")
@@ -276,10 +308,14 @@ class AwsIpAddressList:
             ip_address.object_service_url = f"https://console.aws.amazon.com/directoryservicev2/home?region={region}#!/directories"
             ip_address.object_id = re.sub("^AWS created network interface for directory ", "", description)
             ip_address.object_console_url = f"https://console.aws.amazon.com/directoryservicev2/home?region={region}#!/directories/{ip_address.object_id}"
-            for directory in aws_session.client("ds").get_paginator('describe_directories').paginate(DirectoryIds=[ip_address.object_id]).build_full_result().get("DirectoryDescriptions"):
-                ip_address.object_name = directory.get("ShortName")
-                ip_address.object_description = directory.get("Description")
-            # TODO: Load tags
+            ds_client = aws_session.client("ds")
+            directory_info = next(iter(ds_client.get_paginator('describe_directories').paginate(DirectoryIds=[ip_address.object_id]).build_full_result().get("DirectoryDescriptions")), None)
+            if directory_info:
+                ip_address.object_name = directory_info.get("ShortName")
+                ip_address.object_description = directory_info.get("Description")
+                tags = ds_client.get_paginator("list_tags_for_resource").paginate(ResourceId=ip_address.object_id).build_full_result().get("Tags")
+                ip_address.object_tag_project = get_tag_value(tags, "Project")
+                ip_address.object_tag_environment = get_tag_value(tags, "Environment")
 
         elif description and description.startswith("Created By Amazon Workspaces for AWS Account ID"):
             logger.debug(f"  Detected Workspace; loading info...")
@@ -308,56 +344,113 @@ class AwsIpAddressList:
             ip_address.object_service_url = f"https://console.aws.amazon.com/lambda/home?region={region}#/functions"
             ip_address.object_id = re.sub("AWS Lambda VPC ENI-", "", description)[::-1][37:][::-1]
             ip_address.object_console_url = f"https://console.aws.amazon.com/lambda/home?region={region}#/functions/{ip_address.object_id}?tab=configuration"
-            lambda_client = aws_session.client("lambda")
-            try:
-                lambda_function = lambda_client.get_function(FunctionName=ip_address.object_id)
-                tags = lambda_function.get("Tags")
+
+            if self.lambda_cache_by_region.get(aws_session.region_name) is None:
+                logger.debug(f"  Caching basic Lambda functions information for region {region}...")
+                start = time.time()
+                self.lambda_cache_by_region[aws_session.region_name] = aws_session.client("lambda").get_paginator('list_functions').paginate().build_full_result().get("Functions")
+                logger.debug(f"  Basic Lambda functions information cache loaded in {(time.time() - start):.2f} secs.")
+
+            lambda_function = next((x for x in self.lambda_cache_by_region[aws_session.region_name] if x.get("FunctionName") == ip_address.object_id), None)
+            if lambda_function:
+                tags = aws_session.client("lambda").list_tags(Resource=lambda_function.get("FunctionArn")).get("Tags")
                 ip_address.object_tag_project = get_tag_value(tags, "project")
                 ip_address.object_tag_environment = get_tag_value(tags, "environment")
-            except ClientError as ex:
-                if ex.response['Error']['Code'] == 'ResourceNotFoundException':
-                    pass
-                else:
-                    raise ex
 
         elif ":AWSCodeBuild-" in interface_requester_id:
             logger.debug(f"  Detected Codebuild; loading info...")
             ip_address.object_type = OBJECT_TYPE_CODEBUILD
             ip_address.object_service_url = f"https://console.aws.amazon.com/codesuite/codebuild/projects?region={region}"
+            # TODO: Load additional info
 
         elif description and description == "DMSNetworkInterface":
             logger.debug(f"  Detected DMSNetworkInterface; loading info...")
             ip_address.object_type = OBJECT_TYPE_DMS
             ip_address.object_service_url = f"https://console.aws.amazon.com/dms/v2/home?region={region}#dashboard"
+            # TODO: Load additional info
+
+        elif description and description.startswith("VPC Endpoint Interface vpce-"):
+            logger.debug(f"  Detected VPC endpoint; loading info...")
+            ip_address.object_type = OBJECT_TYPE_VPC_ENDPOINT
+            ip_address.object_service_url = f"https://console.aws.amazon.com/vpc/home?region={region}#Endpoints:sort=vpcEndpointId"
+            ip_address.object_id = re.sub("VPC Endpoint Interface ", "", description)
+            ip_address.object_console_url = f"https://console.aws.amazon.com/vpc/home?region={region}#Endpoints:vpcEndpointId={ip_address.object_id};sort=vpcEndpointId"
+            # TODO: Load additional info
+
+        elif description and description.startswith("Route 53 Resolver: "):
+
+            logger.debug(f"  Detected Route53 resolver; loading info...")
+            ip_address.object_type = OBJECT_TYPE_ROUTE53_RESOLVER
+            ip_address.object_service_url = f"https://console.aws.amazon.com/route53resolver/home?region={region}#/vpc/{ip_address.vpc_id}"
+            resolver_description = re.sub("Route 53 Resolver: ", "", description)
+            ip_address.object_id = resolver_description.split(":")[0]
+            ip_address.object_console_url = f"https://console.aws.amazon.com/route53resolver/home?region={region}#/endpoint/{ip_address.object_id}"
+
+            if self.route53_resolvers_endpoints_cache_by_region.get(aws_session.region_name) is None:
+                self.route53_resolvers_endpoints_cache_by_region[aws_session.region_name] = aws_session.client("route53resolver").get_paginator('list_resolver_endpoints').paginate().build_full_result().get("ResolverEndpoints")
+
+            resolver_endpoint = next((x for x in self.route53_resolvers_endpoints_cache_by_region[aws_session.region_name] if x.get("Id") == ip_address.object_id), None)
+            if resolver_endpoint:
+                ip_address.object_name = resolver_endpoint.get("Name")
+                tags = aws_session.client("route53resolver").get_paginator('list_tags_for_resource').paginate(ResourceArn=resolver_endpoint.get("Arn")).build_full_result().get("Tags")
+                ip_address.object_tag_project = get_tag_value(tags, "Project")
+                ip_address.object_tag_environment = get_tag_value(tags, "Environment")
+
+        elif description and description.startswith("Network Interface for Transit Gateway Attachment "):
+
+            logger.debug(f"  Detected Transit Gateway; loading info...")
+            ip_address.object_type = OBJECT_TYPE_TRANSIT_GATEWAY
+            ip_address.object_service_url = f"https://console.aws.amazon.com/directconnect/v2/home?region={region}#/transit-gateways"
+
+            attachment_id = re.sub("Network Interface for Transit Gateway Attachment ", "", description)
+            if self.transit_gateway_attachments_cache_by_region.get(aws_session.region_name) is None:
+                self.transit_gateway_attachments_cache_by_region[aws_session.region_name] = aws_session.client("ec2").get_paginator('describe_transit_gateway_attachments').paginate().build_full_result().get("TransitGatewayAttachments")
+            transit_gateway_attachment = next((x for x in self.transit_gateway_attachments_cache_by_region[aws_session.region_name] if x.get("TransitGatewayAttachmentId") == attachment_id), None)
+
+            if transit_gateway_attachment:
+                ip_address.object_id = transit_gateway_attachment.get("TransitGatewayId")
+                if self.transit_gateway_cache_by_region.get(aws_session.region_name) is None:
+                    self.transit_gateway_cache_by_region[aws_session.region_name] = aws_session.client("ec2").get_paginator('describe_transit_gateways').paginate().build_full_result().get("TransitGateways")
+                transit_gateway = next((x for x in self.transit_gateway_cache_by_region[aws_session.region_name] if x.get("TransitGatewayId") == transit_gateway_attachment.get("TransitGatewayId")), None)
+                if transit_gateway:
+                    ip_address.object_console_url = f"https://console.aws.amazon.com/directconnect/v2/home?region={region}#/transit-gateways/{transit_gateway.get('TransitGatewayArn').replace(':transit-gateway/', ':')}"
+                    tags = transit_gateway.get("Tags")
+                    ip_address.object_name = get_tag_value(tags, "Name") or transit_gateway.get("Description")
+                    ip_address.object_description = transit_gateway.get("Description")
+                    ip_address.object_tag_project = get_tag_value(tags, "Project")
+                    ip_address.object_tag_environment = get_tag_value(tags, "Environment")
+
+        elif description and description.startswith("Network interface for DBProxy "):
+
+            # No tags, this type of object doesn't support tags
+            logger.debug(f"  Detected RDS proxy; loading info...")
+            ip_address.object_type = OBJECT_TYPE_RDS_PROXY
+            ip_address.object_service_url = f"https://console.aws.amazon.com/rds/home?region={region}#proxies:"
+            ip_address.object_id = re.sub("Network interface for DBProxy ", "", description)
+            ip_address.object_console_url = f"https://console.aws.amazon.com/rds/home?region={region}#proxy:id={ip_address.object_id}"
 
         else:
             logger.warning(f"  Unknown object type for interface {interface_id} with private IP address {private_ip_address}")
-            logger.debug(json.dumps(interface_data, indent=4))
+            logger.debug(pformat(interface_data))
             ip_address.object_type = OBJECT_TYPE_UNKNOWN
 
         self.ip_list.append(ip_address)
 
+    def cache_vpc(self, aws_session, force: Optional[bool] = False) -> None:
+        if self.vpc_cache_by_region.get(aws_session.region_name) is None or force:
+            self.vpc_cache_by_region[aws_session.region_name] = aws_session.client("ec2").get_paginator("describe_vpcs").paginate().build_full_result().get("Vpcs")
+
     def get_vpc_name(self, aws_session, vpc_id: str) -> Optional[str]:
-        if vpc_id in self.vpc_cache.keys():
-            return self.vpc_cache[vpc_id]
-        vpc_data = aws_session.client("ec2").describe_vpcs(VpcIds=[vpc_id])
-        if vpc_data.get("Vpcs", []):
-            vpc_name = get_tag_value(vpc_data.get("Vpcs")[0].get("Tags"), "Name")
-            self.vpc_cache[vpc_id] = vpc_name
-        else:
-            self.vpc_cache[vpc_id] = None
-        return self.vpc_cache[vpc_id]
+        self.cache_vpc(aws_session)
+        return get_tag_value(next((x for x in self.vpc_cache_by_region[aws_session.region_name] if x.get("VpcId") == vpc_id), {}).get("Tags"), "Name")
+
+    def cache_subnet(self, aws_session, force: Optional[bool] = False) -> None:
+        if self.subnet_cache_by_region.get(aws_session.region_name) is None or force:
+            self.subnet_cache_by_region[aws_session.region_name] = aws_session.client("ec2").get_paginator("describe_subnets").paginate().build_full_result().get("Subnets")
 
     def get_subnet_name(self, aws_session, subnet_id: str) -> Optional[str]:
-        if subnet_id in self.subnet_cache.keys():
-            return self.subnet_cache[subnet_id]
-        subnet_data = aws_session.client("ec2").describe_subnets(SubnetIds=[subnet_id])
-        if subnet_data.get("Subnets", []):
-            subnet_name = get_tag_value(subnet_data.get("Subnets")[0].get("Tags"), "Name")
-            self.subnet_cache[subnet_id] = subnet_name
-        else:
-            self.subnet_cache[subnet_id] = None
-        return self.subnet_cache[subnet_id]
+        self.cache_subnet(aws_session)
+        return get_tag_value(next((x for x in self.subnet_cache_by_region.get(aws_session.region_name) if x.get("SubnetId") == subnet_id), {}).get("Tags"), "Name")
 
     def sorted_by_ip(self):
         return sorted(self.ip_list, key=lambda x: ipaddress.IPv4Address(x.private_ip_address))
@@ -390,8 +483,17 @@ class AwsIpAddress:
     object_console_url: Optional[str] = None
     object_service_url: Optional[str] = None
 
+    interface_link: Optional[str] = Optional[str]
     vpc_link: Optional[str] = Optional[str]
     subnet_link: Optional[str] = Optional[str]
+
+    @property
+    def interface_link(self) -> str:
+        return f"https://console.aws.amazon.com/ec2/v2/home?region={self.region}#NetworkInterface:networkInterfaceId={self.interface_id}"
+
+    @interface_link.setter
+    def interface_link(self, _val):
+        pass
 
     @property
     def vpc_link(self) -> str:
@@ -450,10 +552,7 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
     account_id = account_info.get("Account")
 
     logger.debug("Loading account alias...")
-    account_alias = None
-    account_aliases = default_session.client("iam").get_paginator("list_account_aliases").paginate().build_full_result().get("AccountAliases")
-    if account_aliases:
-        account_alias = account_aliases[0]
+    account_alias = next(iter(default_session.client("iam").get_paginator("list_account_aliases").paginate().build_full_result().get("AccountAliases")), None)
 
     ip_addresses = AwsIpAddressList()
 
