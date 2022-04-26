@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "awsipinventory"
-version = "0.4.18"
+version = "0.5.0"
 description = ""
 authors = ["Juan A. S. <okelet@gmail.com>"]
 
