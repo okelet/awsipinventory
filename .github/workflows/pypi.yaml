@@ -27,8 +27,7 @@ jobs:
       - name: Get version
         id: version
         run:
-          V=$(poetry version -s)
-          echo "::set-output name=VERSION::${V}"
+          echo "::set-output name=VERSION::$(poetry version -s)"
 
       # https://github.com/mukunku/tag-exists-action
       - name: Check if tag ${{ steps.version.outputs.VERSION }} already exists
@@ -40,15 +39,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # https://github.com/stefanzweifel/git-auto-commit-action
-      - name: Commit and push pyproject.toml
-        if: ${{ steps.checkTag.outputs.exists == 'false' }}
+      - name: Create and push tag
+        if: ${{ steps.check_tag.outputs.exists == 'false' }}
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
-          tagging_message: ${{ github.event.inputs.version }}
-          commit_message: "Bump version ${{ github.event.inputs.version }}"
+          tagging_message: ${{ steps.version.outputs.VERSION }}
 
       - name: Publish project in pypi.org
-        if: ${{ steps.checkTag.outputs.exists == 'false' }}
+        if: ${{ steps.check_tag.outputs.exists == 'false' }}
         run: poetry publish --no-interaction --build --username $PYPI_USERNAME --password $PYPI_PASSWORD
         env:
           PYPI_USERNAME: __token__
@@ -56,9 +54,9 @@ jobs:
 
       # https://github.com/softprops/action-gh-release
       - name: Release version
-        if: ${{ steps.checkTag.outputs.exists == 'false' }}
+        if: ${{ steps.check_tag.outputs.exists == 'false' }}
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: Release ${{ github.event.inputs.version }}
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Release ${{ steps.version.outputs.VERSION }}
           files: dist/*
