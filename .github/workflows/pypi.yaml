@@ -1,13 +1,24 @@
-name: Python package
+name: Create new release
+
 on:
-  push:
-    tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, in format 1.2.3'
+        required: true
 
 jobs:
-  build:
+  create_release:
     runs-on: ubuntu-latest
     steps:
+
+      - name: Check version format
+        run: |
+          if [[ ${{ github.event.inputs.version }} !~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            text="Version ${{ github.event.inputs.version }} is not valid."
+            echo "::error::$text"
+            exit 1
+          fi
 
       - name: Checkout code
         uses: actions/checkout@v2
@@ -23,19 +34,15 @@ jobs:
       - name: Update PATH
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Get the version
-        id: get_version
-        run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
-
       - name: Update version in pyproject.toml
-        run: poetry version ${{ steps.get_version.outputs.VERSION }}
+        run: poetry version ${{ github.event.inputs.version }}
 
       - name: Commit and push pyproject.toml
         uses: stefanzweifel/git-auto-commit-action@v4
         id: commit_and_push
         with:
           branch: main
-          commit_message: "Bump version ${{ steps.get_version.outputs.VERSION }}"
+          commit_message: "Bump version ${{ github.event.inputs.version }}"
 
       - name: Publish project in pypi.org
         run: poetry publish --no-interaction --build --username $PYPI_USERNAME --password $PYPI_PASSWORD
@@ -46,7 +53,6 @@ jobs:
       - name: Release version
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-          name: Release ${{ steps.get_version.outputs.VERSION }}
-          target_commitish: ${{ steps.commit_and_push.outputs.commit_hash }}
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
           files: dist/*
