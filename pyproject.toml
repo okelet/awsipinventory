@@ -3,6 +3,10 @@ name = "awsipinventory"
 version = "0.6.0"
 description = ""
 authors = ["Juan A. S. <okelet@gmail.com>"]
+readme = "README.md"
+homepage = "https://github.com/okelet/awsipinventory"
+repository = "https://github.com/okelet/awsipinventory"
+documentation = "https://github.com/okelet/awsipinventory"
 
 [tool.poetry.dependencies]
 python = "^3.10"
