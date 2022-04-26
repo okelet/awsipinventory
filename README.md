@@ -48,19 +48,18 @@ ECS tasks, etc. Others have a longer life, like the ones used in "static" EC2 in
 
 ## Installation
 
-Using [pip](https://pip.pypa.io/en/stable/):
+Using [pipx](https://github.com/pypa/pipx):
 
 ```bash
-pip install --user --force-reinstall --ignore-installed https://github.com/okelet/awsipinventory/archive/main.tar.gz
+pipx install awsipinventory
 ```
 
-Cloning the repository:
+Cloning the repository, using [Poetry](https://python-poetry.org/):
 
 ```bash
-pip install pipenv --user
 git clone https://github.com/okelet/awsipinventory
 cd awsipinventory
-pipenv install
+poetry install
 ```
 
 ## Usage
@@ -113,7 +112,7 @@ awsipinventory --format html --output /tmp/inventory.html && firefox $(wslpath -
 From local development environment or cloned repository:
 
 ```bash
-pipenv run python -m awsipinventory
+poetry run python -m awsipinventory
 ```
 
 ## Output examples
