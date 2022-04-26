@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "awsipinventory"
-version = "0.6.2"
-description = ""
+description = "Tool to generate an inventory of all IP addresses in use in an account, one or multiple VPC, or one or multiple subnet."
+version = "0.6.3"
 authors = ["Juan A. S. <okelet@gmail.com>"]
 readme = "README.md"
 homepage = "https://github.com/okelet/awsipinventory"
