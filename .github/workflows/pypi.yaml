@@ -28,13 +28,16 @@ jobs:
         id: version
         run:
           V=$(poetry version -s)
-          echo '::set-output name=VERSION::${V}'
+          echo "::set-output name=VERSION::${V}"
 
       # https://github.com/mukunku/tag-exists-action
-      - uses: mukunku/tag-exists-action@v1.0.0
+      - name: Check if tag ${{ steps.version.outputs.VERSION }} already exists
+        uses: mukunku/tag-exists-action@v1.0.0
         id: check_tag
         with:
           tag: ${{ steps.version.outputs.VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # https://github.com/stefanzweifel/git-auto-commit-action
       - name: Commit and push pyproject.toml
