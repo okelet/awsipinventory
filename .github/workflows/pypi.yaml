@@ -14,7 +14,7 @@ jobs:
 
       - name: Check version format
         run: |
-          if [[ ${{ github.event.inputs.version }} !~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "${{ github.event.inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             text="Version ${{ github.event.inputs.version }} is not valid."
             echo "::error::$text"
             exit 1
