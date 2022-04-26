@@ -41,7 +41,7 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v4
         id: commit_and_push
         with:
-          branch: main
+          tagging_message: ${{ github.event.inputs.version }}
           commit_message: "Bump version ${{ github.event.inputs.version }}"
 
       - name: Publish project in pypi.org
