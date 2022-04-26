@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "awsipinventory"
+version = "0.3.0"
+description = ""
+authors = ["Juan A. S. <okelet@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+boto3 = "^1.22.0"
+tabulate = "^0.8.9"
+Jinja2 = "^3.1.1"
+PyYAML = "^6.0"
+
+[tool.poetry.dev-dependencies]
+
+[tool.poetry.scripts]
+awsipinventory = 'awsipinventory:cli'
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
