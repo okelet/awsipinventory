@@ -1,24 +1,14 @@
 name: Create new release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to release, in format 1.2.3'
-        required: true
+  push:
+    branches:
+      - main
 
 jobs:
-  create_release:
+  check_new_version_and_release:
     runs-on: ubuntu-latest
     steps:
-
-      - name: Check version format
-        run: |
-          if [[ ! "${{ github.event.inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            text="Version ${{ github.event.inputs.version }} is not valid."
-            echo "::error::$text"
-            exit 1
-          fi
 
       - name: Checkout code
         uses: actions/checkout@v2
@@ -28,29 +18,42 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install Poetry
-        run: curl -sSL https://install.python-poetry.org | python3 -
-
       - name: Update PATH
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Update version in pyproject.toml
-        run: poetry version ${{ github.event.inputs.version }}
+      - name: Install Poetry
+        run: curl -sSL https://install.python-poetry.org | python3 -
 
+      - name: Get version
+        id: version
+        run:
+          V=$(poetry version -s)
+          echo '::set-output name=VERSION::${V}'
+
+      # https://github.com/mukunku/tag-exists-action
+      - uses: mukunku/tag-exists-action@v1.0.0
+        id: check_tag
+        with:
+          tag: ${{ steps.version.outputs.VERSION }}
+
+      # https://github.com/stefanzweifel/git-auto-commit-action
       - name: Commit and push pyproject.toml
+        if: ${{ steps.checkTag.outputs.exists == 'false' }}
         uses: stefanzweifel/git-auto-commit-action@v4
-        id: commit_and_push
         with:
           tagging_message: ${{ github.event.inputs.version }}
           commit_message: "Bump version ${{ github.event.inputs.version }}"
 
       - name: Publish project in pypi.org
+        if: ${{ steps.checkTag.outputs.exists == 'false' }}
         run: poetry publish --no-interaction --build --username $PYPI_USERNAME --password $PYPI_PASSWORD
         env:
           PYPI_USERNAME: __token__
           PYPI_PASSWORD: ${{ secrets.PYPI_TOKEN }}
 
+      # https://github.com/softprops/action-gh-release
       - name: Release version
+        if: ${{ steps.checkTag.outputs.exists == 'false' }}
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.version }}
