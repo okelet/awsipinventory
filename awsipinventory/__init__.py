@@ -1,6 +1,7 @@
 import argparse
 import csv
 import dataclasses
+import importlib.metadata
 import ipaddress
 import json
 import logging
@@ -18,6 +19,8 @@ import boto3
 import jinja2
 import yaml
 from tabulate import tabulate
+
+__version__ = importlib.metadata.version(__package__)
 
 INTERFACE_AVAILABLE = "available"
 OBJECT_TYPE_UNKNOWN = "unknown"
@@ -665,6 +668,7 @@ def cli():
     parser.add_argument("--regions", nargs="*", help="Use \"all\" to get data from all enabled regions")
     parser.add_argument("--vpcs", nargs="*", help="Restrict results to specific VPCs (must exist in the account and regions)")
     parser.add_argument("--subnets", nargs="*", help="Restrict results to specific subnets (must exist in the account, VPCs and regions)")
+    parser.add_argument('--version', action='version', version=__version__)
     args = parser.parse_args()
 
     logger.setLevel(getattr(logging, args.log_level))
