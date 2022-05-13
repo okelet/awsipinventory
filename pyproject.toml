@@ -16,9 +16,26 @@ Jinja2 = "^3.1.1"
 PyYAML = "^6.0"
 
 [tool.poetry.dev-dependencies]
+black = "^22.3.0"
+isort = "^5.10.1"
+mypy = "^0.950"
+pylint = "^2.13.8"
+flake8 = "^4.0.1"
 
 [tool.poetry.scripts]
-awsipinventory = 'awsipinventory:cli'
+awsipinventory = "awsipinventory:cli"
+
+[tool.black]
+line-length = 999
+
+[tool.isort]
+line_length = 999
+
+[tool.pylint.format]
+max-line-length = 999
+
+[tool.pylint.master]
+extension-pkg-whitelist = "pydantic,PySide6"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

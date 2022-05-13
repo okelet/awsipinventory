@@ -1,0 +1,13 @@
+{
+    "cSpell.words": [
+        "awsipinventory",
+        "awsume",
+        "boto",
+        "ELBV",
+        "isort",
+        "mypy",
+        "pipx",
+        "pylint",
+        "wslpath"
+    ]
+}

@@ -41,7 +41,7 @@ Supported services:
 
 Internally, the script gets the list of [network interfaces](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client.describe_network_interfaces),
 and tries to guess to what service and object the interface is attached to; this is not always possible, because there is no a direct property
-to know it, and this must be guessed using regexs and string comparison using the interface description or the requester property.
+to know it, and this must be guessed using regular expressions and string comparison using the interface description or the requester property.
 
 Keep in mind that some network interfaces are ephemeral, i.e. they live only for a short period of time, like the ones used in Lambda,
 ECS tasks, etc. Others have a longer life, like the ones used in "static" EC2 instances.
@@ -188,4 +188,23 @@ Or using `docker-compose`:
 awsume xxx
 docker-compose up --build --force-recreate
 docker-compose rm -fs
+```
+
+## Code quality
+
+Running directly the commands:
+
+```bash
+poetry run pylint awsipinventory
+poetry run black awsipinventory
+poetry run mypy awsipinventory
+poetry run isort awsipinventory
+poetry run flake8 awsipinventory
+```
+
+Using `pre-commit`:
+
+```bash
+git add --intent-to-add .
+poetry run pre-commit run --all-files
 ```

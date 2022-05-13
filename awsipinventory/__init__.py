@@ -30,7 +30,7 @@ OBJECT_TYPE_DIRECTORY = "directory"
 OBJECT_TYPE_NAT_GATEWAY = "nat_gateway"
 OBJECT_TYPE_RDS = "rds"
 OBJECT_TYPE_ELB = "elb"
-OBJECT_TYPE_ELBv2 = "elbv2"
+OBJECT_TYPE_ELBV2 = "elbv2"
 OBJECT_TYPE_EFS = "efs"
 OBJECT_TYPE_ECS_TASK = "ecs_task"
 OBJECT_TYPE_LAMBDA = "lambda"
@@ -157,7 +157,7 @@ class AwsIpAddressList:
 
             if load_balancer_name.startswith("app/") or load_balancer_name.startswith("net/"):
                 load_balancer_name = load_balancer_name.split("/")[1]
-                ip_address.object_type = OBJECT_TYPE_ELBv2
+                ip_address.object_type = OBJECT_TYPE_ELBV2
                 if self.load_balancers_v2_cache_by_region.get(aws_session.region_name) is None:
                     logger.debug(f"  Caching ELBv2 for region {region}...")
                     start = time.time()
