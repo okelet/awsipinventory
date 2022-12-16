@@ -6,6 +6,7 @@
         "ELBV",
         "isort",
         "mypy",
+        "pformat",
         "pipx",
         "pylint",
         "wslpath"

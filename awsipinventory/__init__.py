@@ -1,3 +1,6 @@
+"""
+awsipinventory module.
+"""
 import argparse
 import csv
 import dataclasses
@@ -11,14 +14,21 @@ import socket
 import sys
 import time
 from dataclasses import dataclass
-from pprint import pprint, pformat
-from typing import Optional, List, Dict, Any
-from typing.io import IO
+from pprint import pformat
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import IO
 
 import boto3
 import jinja2
 import yaml
 from tabulate import tabulate
+
+if TYPE_CHECKING:
+    from mypy_boto3_ec2 import EC2Client
+    from mypy_boto3_elbv2 import ElasticLoadBalancingv2Client
+else:
+    EC2Client = object
+    ElasticLoadBalancingv2Client = object
 
 __version__ = importlib.metadata.version(__package__)
 
@@ -44,13 +54,18 @@ OBJECT_TYPE_TRANSIT_GATEWAY = "transit_gateway"
 OBJECT_TYPE_RDS_PROXY = "rds_proxy"
 
 
-def chunks(lst, n):
-    """Yield successive n-sized chunks from lst."""
-    for i in range(0, len(lst), n):
-        yield lst[i:i + n]
+def chunks(lst, count):
+    """
+    Yield successive n-sized chunks from lst.
+    """
+    for i in range(0, len(lst), count):
+        yield lst[i : i + count]
 
 
-def get_tag_value(tags: Optional[List[Dict[str, str]]], tag_name: str) -> Optional[str]:
+def get_tag_value(tags: Optional[Union[List[Dict[str, str]], Dict[str, str]]], tag_name: str) -> Optional[str]:
+    """ "
+    Returns the value of a tag from its key; tags can be a list of dicts (with keys Name and Value) or a dict.
+    """
     if not tags:
         return None
     if isinstance(tags, list):
@@ -61,11 +76,16 @@ def get_tag_value(tags: Optional[List[Dict[str, str]]], tag_name: str) -> Option
 
 
 class InvalidRegionException(Exception):
+    """
+    InvalidRegionException; thrown when an invalid region is set.
+    """
     pass
 
 
-class AwsIpAddressList:
-
+class AwsInterfaceList:  # pylint disable=too-many-instance-attrubutes
+    """
+    Stores information about a list of IP interfaces in AWS.
+    """
     def __init__(self):
         self.ip_list: List[AwsIpAddress] = []
         self.vpc_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
@@ -82,7 +102,6 @@ class AwsIpAddressList:
         self.transit_gateway_cache_by_region: Dict[str, List[Dict[str, Any]]] = {}
 
     def add_from_data(self, logger: logging.Logger, aws_session, interface_data):
-
         region = aws_session.region_name
         description: Optional[str] = interface_data.get("Description") or None
         vpc_id: str = interface_data.get("VpcId")
@@ -116,7 +135,7 @@ class AwsIpAddressList:
 
         elif instance_id:
             # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html
-            logger.debug(f"  Detected EC2 instance; loading info...")
+            logger.debug("  Detected EC2 instance; loading info...")
             ip_address.object_type = OBJECT_TYPE_INSTANCE
             ip_address.object_service_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#Instances:"
             ip_address.object_id = instance_id
@@ -139,7 +158,7 @@ class AwsIpAddressList:
         elif interface_requester_id == "amazon-elasticache" and description:
             # Description can be like:
             # - ElastiCache xxx-0001-001
-            logger.debug(f"  Detected Elasticache; loading info...")
+            logger.debug("  Detected Elasticache; loading info...")
             ip_address.object_type = OBJECT_TYPE_ELASTICACHE
             ip_address.object_service_url = f"https://console.aws.amazon.com/elasticache/home?region={region}#"
             ip_address.object_id = re.sub("^ElastiCache ", "", description)
@@ -150,7 +169,7 @@ class AwsIpAddressList:
             # Description can be like:
             # - ELB awseb-e-u-AWSEBLoa-zzz (classic)
             # - ELB app/awseb-AWSEB-xxx/yyy -> only awseb-... is the real name (application)
-            logger.debug(f"  Detected ELB; loading info...")
+            logger.debug("  Detected ELB; loading info...")
             ip_address.object_type = OBJECT_TYPE_ELB
             ip_address.object_service_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#LoadBalancers:sort=loadBalancerName"
             load_balancer_name = re.sub("^ELB ", "", description)
@@ -161,8 +180,8 @@ class AwsIpAddressList:
                 if self.load_balancers_v2_cache_by_region.get(aws_session.region_name) is None:
                     logger.debug(f"  Caching ELBv2 for region {region}...")
                     start = time.time()
-                    elb_v2_client = aws_session.client("elbv2")
-                    self.load_balancers_v2_cache_by_region[aws_session.region_name] = elb_v2_client.get_paginator('describe_load_balancers').paginate().build_full_result().get("LoadBalancers")
+                    elb_v2_client: ElasticLoadBalancingv2Client = aws_session.client("elbv2")
+                    self.load_balancers_v2_cache_by_region[aws_session.region_name] = elb_v2_client.get_paginator("describe_load_balancers").paginate().build_full_result().get("LoadBalancers")
                     for chunk in chunks(self.load_balancers_v2_cache_by_region[aws_session.region_name], 20):
                         for balancer_tags in elb_v2_client.describe_tags(ResourceArns=[x.get("LoadBalancerArn") for x in chunk]).get("TagDescriptions"):
                             next((x for x in self.load_balancers_v2_cache_by_region[aws_session.region_name] if x.get("LoadBalancerArn") == balancer_tags.get("ResourceArn")))["Tags"] = balancer_tags.get("Tags")
@@ -173,7 +192,7 @@ class AwsIpAddressList:
                     logger.debug(f"  Caching ELBv1 for region {region}...")
                     start = time.time()
                     elb_v1_client = aws_session.client("elb")
-                    self.load_balancers_v1_cache_by_region[aws_session.region_name] = elb_v1_client.get_paginator('describe_load_balancers').paginate().build_full_result().get("LoadBalancerDescriptions")
+                    self.load_balancers_v1_cache_by_region[aws_session.region_name] = elb_v1_client.get_paginator("describe_load_balancers").paginate().build_full_result().get("LoadBalancerDescriptions")
                     for chunk in chunks(self.load_balancers_v1_cache_by_region[aws_session.region_name], 20):
                         for balancer_tags in elb_v1_client.describe_tags(LoadBalancerNames=[x.get("LoadBalancerName") for x in chunk]).get("TagDescriptions"):
                             next((x for x in self.load_balancers_v1_cache_by_region[aws_session.region_name] if x.get("LoadBalancerName") == balancer_tags.get("LoadBalancerName")))["Tags"] = balancer_tags.get("Tags")
@@ -205,7 +224,7 @@ class AwsIpAddressList:
         elif description == "RDSNetworkInterface" or (interface_requester_id == "amazon-rds" and description):
 
             # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/rds.html
-            logger.debug(f"  Detected RDS instance; loading info...")
+            logger.debug("  Detected RDS instance; loading info...")
             ip_address.object_type = OBJECT_TYPE_RDS
             ip_address.object_service_url = f"https://console.aws.amazon.com/rds/home?region={region}#"
 
@@ -228,7 +247,7 @@ class AwsIpAddressList:
                             if public and public_ip_address and endpoint_ip == public_ip_address:
                                 instance_data = db_instance
                                 break
-                            elif not public and private_ip_address and endpoint_ip == private_ip_address:
+                            if not public and private_ip_address and endpoint_ip == private_ip_address:
                                 instance_data = db_instance
                                 break
 
@@ -243,7 +262,7 @@ class AwsIpAddressList:
 
         elif description and description.startswith("arn:aws:ecs:"):
 
-            logger.debug(f"  Detected ECS task; loading info...")
+            logger.debug("  Detected ECS task; loading info...")
             ip_address.object_type = OBJECT_TYPE_ECS_TASK
             ip_address.object_service_url = f"https://console.aws.amazon.com/ecs/home?region={region}#/clusters"
             interface_id = description.split("/")[-1]
@@ -278,7 +297,7 @@ class AwsIpAddressList:
                         ip_address.object_description = get_tag_value(tags, "description")
 
         elif description and description.startswith("Interface for NAT Gateway nat-"):
-            logger.debug(f"  Detected NAT gateway; loading info...")
+            logger.debug("  Detected NAT gateway; loading info...")
             ip_address.object_type = OBJECT_TYPE_NAT_GATEWAY
             ip_address.object_service_url = f"https://console.aws.amazon.com/vpc/home?region={region}#NatGateways:"
             ip_address.object_id = re.sub("^Interface for NAT Gateway ", "", description)
@@ -292,7 +311,7 @@ class AwsIpAddressList:
 
         elif description and description.startswith("EFS mount target for fs-"):
             # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/efs.html
-            logger.debug(f"  Detected EFS mount target; loading info...")
+            logger.debug("  Detected EFS mount target; loading info...")
             fs_id = re.compile(".*(fs-[a-z0-9]*).*").match(description).group(1)
             ip_address.object_type = OBJECT_TYPE_EFS
             ip_address.object_service_url = f"https://console.aws.amazon.com/efs/home?region={region}#/file-systems"
@@ -306,13 +325,13 @@ class AwsIpAddressList:
                 ip_address.object_description = get_tag_value(fs_data.get("Tags"), "description")
 
         elif description and description.startswith("AWS created network interface for directory d-"):
-            logger.debug(f"  Detected Directory; loading info...")
+            logger.debug("  Detected Directory; loading info...")
             ip_address.object_type = OBJECT_TYPE_DIRECTORY
             ip_address.object_service_url = f"https://console.aws.amazon.com/directoryservicev2/home?region={region}#!/directories"
             ip_address.object_id = re.sub("^AWS created network interface for directory ", "", description)
             ip_address.object_console_url = f"https://console.aws.amazon.com/directoryservicev2/home?region={region}#!/directories/{ip_address.object_id}"
             ds_client = aws_session.client("ds")
-            directory_info = next(iter(ds_client.get_paginator('describe_directories').paginate(DirectoryIds=[ip_address.object_id]).build_full_result().get("DirectoryDescriptions")), None)
+            directory_info = next(iter(ds_client.get_paginator("describe_directories").paginate(DirectoryIds=[ip_address.object_id]).build_full_result().get("DirectoryDescriptions")), None)
             if directory_info:
                 ip_address.object_name = directory_info.get("ShortName")
                 ip_address.object_description = directory_info.get("Description")
@@ -321,7 +340,7 @@ class AwsIpAddressList:
                 ip_address.object_tag_environment = get_tag_value(tags, "Environment")
 
         elif description and description.startswith("Created By Amazon Workspaces for AWS Account ID"):
-            logger.debug(f"  Detected Workspace; loading info...")
+            logger.debug("  Detected Workspace; loading info...")
             ip_address.object_type = OBJECT_TYPE_WORKSPACE
             ip_address.object_service_url = f"https://console.aws.amazon.com/workspaces/home?region={region}#listworkspaces:"
             workspaces_client = aws_session.client("workspaces")
@@ -342,7 +361,7 @@ class AwsIpAddressList:
             # - Reverse
             # - Remove the first 37 chars
             # - Reverse
-            logger.debug(f"  Detected Lambda; loading info...")
+            logger.debug("  Detected Lambda; loading info...")
             ip_address.object_type = OBJECT_TYPE_LAMBDA
             ip_address.object_service_url = f"https://console.aws.amazon.com/lambda/home?region={region}#/functions"
             ip_address.object_id = re.sub("AWS Lambda VPC ENI-", "", description)[::-1][37:][::-1]
@@ -351,7 +370,7 @@ class AwsIpAddressList:
             if self.lambda_cache_by_region.get(aws_session.region_name) is None:
                 logger.debug(f"  Caching basic Lambda functions information for region {region}...")
                 start = time.time()
-                self.lambda_cache_by_region[aws_session.region_name] = aws_session.client("lambda").get_paginator('list_functions').paginate().build_full_result().get("Functions")
+                self.lambda_cache_by_region[aws_session.region_name] = aws_session.client("lambda").get_paginator("list_functions").paginate().build_full_result().get("Functions")
                 logger.debug(f"  Basic Lambda functions information cache loaded in {(time.time() - start):.2f} secs.")
 
             lambda_function = next((x for x in self.lambda_cache_by_region[aws_session.region_name] if x.get("FunctionName") == ip_address.object_id), None)
@@ -361,19 +380,19 @@ class AwsIpAddressList:
                 ip_address.object_tag_environment = get_tag_value(tags, "environment")
 
         elif ":AWSCodeBuild-" in interface_requester_id:
-            logger.debug(f"  Detected Codebuild; loading info...")
+            logger.debug("  Detected Codebuild; loading info...")
             ip_address.object_type = OBJECT_TYPE_CODEBUILD
             ip_address.object_service_url = f"https://console.aws.amazon.com/codesuite/codebuild/projects?region={region}"
             # TODO: Load additional info
 
         elif description and description == "DMSNetworkInterface":
-            logger.debug(f"  Detected DMSNetworkInterface; loading info...")
+            logger.debug("  Detected DMSNetworkInterface; loading info...")
             ip_address.object_type = OBJECT_TYPE_DMS
             ip_address.object_service_url = f"https://console.aws.amazon.com/dms/v2/home?region={region}#dashboard"
             # TODO: Load additional info
 
         elif description and description.startswith("VPC Endpoint Interface vpce-"):
-            logger.debug(f"  Detected VPC endpoint; loading info...")
+            logger.debug("  Detected VPC endpoint; loading info...")
             ip_address.object_type = OBJECT_TYPE_VPC_ENDPOINT
             ip_address.object_service_url = f"https://console.aws.amazon.com/vpc/home?region={region}#Endpoints:sort=vpcEndpointId"
             ip_address.object_id = re.sub("VPC Endpoint Interface ", "", description)
@@ -382,7 +401,7 @@ class AwsIpAddressList:
 
         elif description and description.startswith("Route 53 Resolver: "):
 
-            logger.debug(f"  Detected Route53 resolver; loading info...")
+            logger.debug("  Detected Route53 resolver; loading info...")
             ip_address.object_type = OBJECT_TYPE_ROUTE53_RESOLVER
             ip_address.object_service_url = f"https://console.aws.amazon.com/route53resolver/home?region={region}#/vpc/{ip_address.vpc_id}"
             resolver_description = re.sub("Route 53 Resolver: ", "", description)
@@ -390,30 +409,30 @@ class AwsIpAddressList:
             ip_address.object_console_url = f"https://console.aws.amazon.com/route53resolver/home?region={region}#/endpoint/{ip_address.object_id}"
 
             if self.route53_resolvers_endpoints_cache_by_region.get(aws_session.region_name) is None:
-                self.route53_resolvers_endpoints_cache_by_region[aws_session.region_name] = aws_session.client("route53resolver").get_paginator('list_resolver_endpoints').paginate().build_full_result().get("ResolverEndpoints")
+                self.route53_resolvers_endpoints_cache_by_region[aws_session.region_name] = aws_session.client("route53resolver").get_paginator("list_resolver_endpoints").paginate().build_full_result().get("ResolverEndpoints")
 
             resolver_endpoint = next((x for x in self.route53_resolvers_endpoints_cache_by_region[aws_session.region_name] if x.get("Id") == ip_address.object_id), None)
             if resolver_endpoint:
                 ip_address.object_name = resolver_endpoint.get("Name")
-                tags = aws_session.client("route53resolver").get_paginator('list_tags_for_resource').paginate(ResourceArn=resolver_endpoint.get("Arn")).build_full_result().get("Tags")
+                tags = aws_session.client("route53resolver").get_paginator("list_tags_for_resource").paginate(ResourceArn=resolver_endpoint.get("Arn")).build_full_result().get("Tags")
                 ip_address.object_tag_project = get_tag_value(tags, "Project")
                 ip_address.object_tag_environment = get_tag_value(tags, "Environment")
 
         elif description and description.startswith("Network Interface for Transit Gateway Attachment "):
 
-            logger.debug(f"  Detected Transit Gateway; loading info...")
+            logger.debug("  Detected Transit Gateway; loading info...")
             ip_address.object_type = OBJECT_TYPE_TRANSIT_GATEWAY
             ip_address.object_service_url = f"https://console.aws.amazon.com/directconnect/v2/home?region={region}#/transit-gateways"
 
             attachment_id = re.sub("Network Interface for Transit Gateway Attachment ", "", description)
             if self.transit_gateway_attachments_cache_by_region.get(aws_session.region_name) is None:
-                self.transit_gateway_attachments_cache_by_region[aws_session.region_name] = aws_session.client("ec2").get_paginator('describe_transit_gateway_attachments').paginate().build_full_result().get("TransitGatewayAttachments")
+                self.transit_gateway_attachments_cache_by_region[aws_session.region_name] = aws_session.client("ec2").get_paginator("describe_transit_gateway_attachments").paginate().build_full_result().get("TransitGatewayAttachments")
             transit_gateway_attachment = next((x for x in self.transit_gateway_attachments_cache_by_region[aws_session.region_name] if x.get("TransitGatewayAttachmentId") == attachment_id), None)
 
             if transit_gateway_attachment:
                 ip_address.object_id = transit_gateway_attachment.get("TransitGatewayId")
                 if self.transit_gateway_cache_by_region.get(aws_session.region_name) is None:
-                    self.transit_gateway_cache_by_region[aws_session.region_name] = aws_session.client("ec2").get_paginator('describe_transit_gateways').paginate().build_full_result().get("TransitGateways")
+                    self.transit_gateway_cache_by_region[aws_session.region_name] = aws_session.client("ec2").get_paginator("describe_transit_gateways").paginate().build_full_result().get("TransitGateways")
                 transit_gateway = next((x for x in self.transit_gateway_cache_by_region[aws_session.region_name] if x.get("TransitGatewayId") == transit_gateway_attachment.get("TransitGatewayId")), None)
                 if transit_gateway:
                     ip_address.object_console_url = f"https://console.aws.amazon.com/directconnect/v2/home?region={region}#/transit-gateways/{transit_gateway.get('TransitGatewayArn').replace(':transit-gateway/', ':')}"
@@ -426,7 +445,7 @@ class AwsIpAddressList:
         elif description and description.startswith("Network interface for DBProxy "):
 
             # No tags, this type of object doesn't support tags
-            logger.debug(f"  Detected RDS proxy; loading info...")
+            logger.debug("  Detected RDS proxy; loading info...")
             ip_address.object_type = OBJECT_TYPE_RDS_PROXY
             ip_address.object_service_url = f"https://console.aws.amazon.com/rds/home?region={region}#proxies:"
             ip_address.object_id = re.sub("Network interface for DBProxy ", "", description)
@@ -515,7 +534,9 @@ class AwsIpAddress:
         pass
 
 
-def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[IO[str]] = None, regions: Optional[List[str]] = None, vpc_ids: Optional[List[str]] = None, subnet_ids: Optional[List[str]] = None):
+BasicInterface = AwsIpAddress
+
+def main(logger: logging.Logger, output_format: Optional[str] = None, output: Optional[IO[str]] = None, regions: Optional[List[str]] = None, vpc_ids: Optional[List[str]] = None, subnet_ids: Optional[List[str]] = None):
 
     if output is None:
         output = sys.stdout
@@ -534,7 +555,7 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
                 account_allowed_regions.append(region_data.get("RegionName"))
 
         ec2_regions = []
-        for parameter in default_ssm_client.get_paginator('get_parameters_by_path').paginate(Path=f"/aws/service/global-infrastructure/services/ec2/regions").build_full_result().get("Parameters"):
+        for parameter in default_ssm_client.get_paginator("get_parameters_by_path").paginate(Path="/aws/service/global-infrastructure/services/ec2/regions").build_full_result().get("Parameters"):
             region = parameter.get("Value")
             if region in account_allowed_regions:
                 ec2_regions.append(region)
@@ -557,7 +578,7 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
     logger.debug("Loading account alias...")
     account_alias = next(iter(default_session.client("iam").get_paginator("list_account_aliases").paginate().build_full_result().get("AccountAliases")), None)
 
-    ip_addresses = AwsIpAddressList()
+    ip_addresses = AwsInterfaceList()
 
     for region in regions_to_process:
 
@@ -567,13 +588,13 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
 
         # subnet_ids = ["subnet-bf6888d4"]
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client.describe_network_interfaces
-        logger.debug(f"Loading network interfaces...")
-        args = {"Filters": []}
+        logger.debug("Loading network interfaces...")
+        args: Dict[str, Any] = {"Filters": []}
         if vpc_ids:
             args["Filters"].append({"Name": "vpc-id", "Values": vpc_ids})
         if subnet_ids:
             args["Filters"].append({"Name": "subnet-id", "Values": subnet_ids})
-        network_interfaces = ec2_client.get_paginator('describe_network_interfaces').paginate(**args).build_full_result().get("NetworkInterfaces")
+        network_interfaces = ec2_client.get_paginator("describe_network_interfaces").paginate(**args).build_full_result().get("NetworkInterfaces")
         logger.debug(f"Loaded {len(network_interfaces)} interfaces.")
 
         for idx, interface_data in enumerate(network_interfaces, 1):
@@ -581,7 +602,7 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
             ip_addresses.add_from_data(logger, aws_session, interface_data)
 
     logger.info("Generating output...")
-    if format is None or format == "table":
+    if output_format is None or output_format == "table":
 
         headers = [
             "VPC ID",
@@ -601,74 +622,83 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
             headers.insert(0, "Region")
 
         data = []
-        for x in sorted(ip_addresses.ip_list, key=lambda ip: [ip.region, ip.vpc_name or "", ip.private_ip_address]):
+        for item in sorted(ip_addresses.ip_list, key=lambda ip: [ip.region, ip.vpc_name or "", ip.private_ip_address]):
             ip_data = [
-                x.vpc_id,
-                x.vpc_name,
-                x.subnet_id,
-                x.subnet_name,
-                x.private_ip_address,
-                x.public_ip_address,
-                x.object_type,
-                x.object_id,
-                x.object_name,
-                x.object_tag_project,
-                x.object_tag_environment,
+                item.vpc_id,
+                item.vpc_name,
+                item.subnet_id,
+                item.subnet_name,
+                item.private_ip_address,
+                item.public_ip_address,
+                item.object_type,
+                item.object_id,
+                item.object_name,
+                item.object_tag_project,
+                item.object_tag_environment,
             ]
             if len(regions_to_process) > 1:
-                ip_data.insert(0, x.region)
+                ip_data.insert(0, item.region)
             data.append(ip_data)
 
-        print(tabulate(
-            data,
-            headers=headers,
-            tablefmt="pretty",
-            colalign="left",
-        ), file=output)
+        print(
+            tabulate(
+                data,
+                headers=headers,
+                tablefmt="pretty",
+                colalign="left",
+            ),
+            file=output,
+        )
 
-    elif format == "html":
+    elif output_format == "html":
 
-        templateEnv = jinja2.Environment(loader=jinja2.FileSystemLoader(searchpath=os.path.join(os.path.dirname(os.path.realpath(__file__)), "templates")))
+        template_env = jinja2.Environment(loader=jinja2.FileSystemLoader(searchpath=os.path.join(os.path.dirname(os.path.realpath(__file__)), "templates")))
 
-        print(templateEnv.get_template("inventory.html").render(
-            account_id=account_id,
-            account_alias=account_alias,
-            data=[dataclasses.asdict(x) for x in ip_addresses.ip_list],
-            regions=regions_to_process,
-            vpcs=vpc_ids,
-            subnets=subnet_ids,
-        ), file=output)
+        print(
+            template_env.get_template("inventory.html").render(
+                account_id=account_id,
+                account_alias=account_alias,
+                data=[dataclasses.asdict(x) for x in ip_addresses.ip_list],
+                regions=regions_to_process,
+                vpcs=vpc_ids,
+                subnets=subnet_ids,
+            ),
+            file=output,
+        )
 
-    elif format == "json":
+    elif output_format == "json":
         json.dump([dataclasses.asdict(x) for x in ip_addresses.ip_list], output, indent=4)
 
-    elif format in ["yaml", "yml"]:
+    elif output_format in ["yaml", "yml"]:
         yaml.dump([dataclasses.asdict(x) for x in ip_addresses.ip_list], output)
 
-    elif format == "csv":
+    elif output_format == "csv":
 
         writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
-        writer.writerow([x.name for x in  dataclasses.fields(AwsIpAddress)])
+        writer.writerow([x.name for x in dataclasses.fields(AwsIpAddress)])
         writer.writerows([dataclasses.asdict(x).values() for x in ip_addresses.ip_list])
 
-    elif format == "none":
+    elif output_format == "none":
         # Do not output nothing (useful when debugging)
         pass
 
 
 def cli():
+    """
+    Function that act as command line entrypoint.
+    """
 
     logging.basicConfig()
     logger = logging.getLogger(__name__)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-l", "--log-level", type=str.upper, choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default="WARNING", help="Set the logging level")
+    parser.add_argument("-l", "--log-level", type=str.upper, choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], default="WARNING", help="Set the logging level")
     parser.add_argument("-f", "--format", choices=["none", "table", "html", "json", "yaml", "yml", "csv"], default="table", help="Output format")
-    parser.add_argument("-o", "--output", type=argparse.FileType('w'), default=sys.stdout, help="Output file; defaults to standard output")
-    parser.add_argument("--regions", nargs="*", help="Use \"all\" to get data from all enabled regions")
+    parser.add_argument("-o", "--output", type=argparse.FileType("w"), default=sys.stdout, help="Output file; defaults to standard output")
+    parser.add_argument("--regions", nargs="*", help='Use "all" to get data from all enabled regions')
     parser.add_argument("--vpcs", nargs="*", help="Restrict results to specific VPCs (must exist in the account and regions)")
     parser.add_argument("--subnets", nargs="*", help="Restrict results to specific subnets (must exist in the account, VPCs and regions)")
-    parser.add_argument('--version', action='version', version=__version__)
+    parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args()
 
     logger.setLevel(getattr(logging, args.log_level))
