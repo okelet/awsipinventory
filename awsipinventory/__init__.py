@@ -521,6 +521,9 @@ def main(logger: logging.Logger, format: Optional[str] = None, output: Optional[
         output = sys.stdout
 
     default_session = boto3.session.Session()
+    if default_session.region_name == None:
+        # Default to us-east-1 if AWS_DEFAULT_REGION is not set or configured
+        default_session = boto3.session.Session(region_name='us-east-1')
     default_ec2_client = default_session.client("ec2")
     default_ssm_client = default_session.client("ssm")
 
